@@ -21,6 +21,7 @@ WINDOW_NAME = "Veo dual-lens field debug"
 MARGIN, HEADER_HEIGHT, LENS_WIDTH, LENS_HEIGHT, PANEL_GAP, PITCH_GAP = 20, 34, 1040, 520, 20, 26
 PITCH_HEIGHT = 270
 PITCH_MARGIN_METERS = 8.0
+PANEL_BORDER = 2
 
 
 def load_calibration(calibration_path: Path):
@@ -144,13 +145,44 @@ def raw_to_panel(raw_pixel, image, panel):
 
 def panel_to_raw(click_x, click_y, image, panel):
     x, y, width, height = panel
-    if not (x <= click_x < x + width and y <= click_y < y + height):
+    if not (
+        x + PANEL_BORDER <= click_x < x + width - PANEL_BORDER
+        and y + PANEL_BORDER <= click_y < y + height - PANEL_BORDER
+    ):
         return None
     raw_height, raw_width = image.shape[:2]
     return np.array([(click_x - x) * raw_width / width, (click_y - y) * raw_height / height], dtype=np.float64)
 
 
-def render(images, field_length, field_width, markers):
+def resolve_lens_at_canvas(canvas_x, canvas_y, images):
+    """Return the lens and raw pixel under a composed-canvas position."""
+    for lens_name in ("left", "right"):
+        panel = lens_panel_rect(lens_name)
+        raw_pixel = panel_to_raw(canvas_x, canvas_y, images[lens_name], panel)
+        if raw_pixel is not None:
+            return lens_name, raw_pixel, panel
+    return None
+
+
+def draw_precision_crosshair(canvas, canvas_x, canvas_y, lens_name, raw_pixel, panel):
+    x, y = int(round(canvas_x)), int(round(canvas_y))
+    color = (255, 220, 0)
+    gap, arm = 4, 14
+    cv2.line(canvas, (x - arm, y), (x - gap, y), color, 1, cv2.LINE_AA)
+    cv2.line(canvas, (x + gap, y), (x + arm, y), color, 1, cv2.LINE_AA)
+    cv2.line(canvas, (x, y - arm), (x, y - gap), color, 1, cv2.LINE_AA)
+    cv2.line(canvas, (x, y + gap), (x, y + arm), color, 1, cv2.LINE_AA)
+
+    label = f"{lens_name.upper()} u={raw_pixel[0]:.0f} v={raw_pixel[1]:.0f}"
+    label_x = x + 12
+    if label_x + 180 > panel[0] + panel[2]:
+        label_x = x - 180
+    label_y = y + 22 if y < panel[1] + 38 else y - 10
+    cv2.putText(canvas, label, (label_x, label_y), cv2.FONT_HERSHEY_SIMPLEX,
+                0.48, color, 1, cv2.LINE_AA)
+
+
+def render(images, field_length, field_width, markers, hover=None):
     canvas_width = 2 * MARGIN + 2 * LENS_WIDTH + PANEL_GAP
     pitch_width = int(round(
         PITCH_HEIGHT * (field_length + 2 * PITCH_MARGIN_METERS)
@@ -173,6 +205,15 @@ def render(images, field_length, field_width, markers):
                 color = (0, 220, 255) if marker["inside"] else (0, 70, 255)
                 cv2.drawMarker(canvas, point, color, cv2.MARKER_CROSS, 20, 3)
                 cv2.putText(canvas, f"#{marker['id']}", (point[0] + 10, point[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
+    if hover is not None:
+        draw_precision_crosshair(
+            canvas,
+            hover["canvas"][0],
+            hover["canvas"][1],
+            hover["lens"],
+            hover["raw"],
+            hover["panel"],
+        )
     transform = PitchTransform(pitch_x, pitch_y, pitch_width, pitch_height, field_length, field_width)
     draw_pitch(canvas, transform, markers)
     cv2.putText(canvas, "Click either lens | C clear | Z undo | Q/Esc quit", (MARGIN, canvas_height - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (235, 235, 235), 1, cv2.LINE_AA)
@@ -192,41 +233,54 @@ def main() -> None:
     images = load_lens_images(args.stacked, args.left, args.right)
     lenses, camera2world, field_length, field_width = load_calibration(args.calibration)
     markers: list[dict] = []
-    viewer_frame = render(images, field_length, field_width, markers)
+    hover = None
+    viewer_frame = render(images, field_length, field_width, markers, hover)
 
     def refresh():
         nonlocal viewer_frame
-        viewer_frame = render(images, field_length, field_width, markers)
+        viewer_frame = render(images, field_length, field_width, markers, hover)
         cv2.imshow(WINDOW_NAME, viewer_frame)
 
     def on_click(event, click_x, click_y, _flags, _userdata):
+        nonlocal hover
+        if event == cv2.EVENT_MOUSEMOVE:
+            resolved = resolve_lens_at_canvas(click_x, click_y, images)
+            next_hover = None
+            if resolved is not None:
+                lens_name, raw_pixel, panel = resolved
+                next_hover = {
+                    "lens": lens_name,
+                    "raw": (float(raw_pixel[0]), float(raw_pixel[1])),
+                    "panel": panel,
+                    "canvas": (click_x, click_y),
+                }
+            if next_hover != hover:
+                hover = next_hover
+                refresh()
+            return
         if event != cv2.EVENT_LBUTTONDOWN:
             return
-        # HighGUI mouse callbacks report coordinates in the imshow image's
-        # coordinate space, even when WINDOW_NORMAL scales that image.
-        canvas_x, canvas_y = click_x, click_y
-        for lens_name in ("left", "right"):
-            raw_pixel = panel_to_raw(canvas_x, canvas_y, images[lens_name], lens_panel_rect(lens_name))
-            if raw_pixel is None:
-                continue
-            if args.debug_clicks:
-                print(f"canvas click: ({canvas_x:.1f}, {canvas_y:.1f}) -> {lens_name.upper()} raw: ({raw_pixel[0]:.1f}, {raw_pixel[1]:.1f})")
-            try:
-                world = pixel_to_field(raw_pixel, lenses[lens_name]["K"], lenses[lens_name]["distortion"], lenses[lens_name]["lens2camera"], camera2world)
-            except RuntimeError as error:
-                print(f"{lens_name.upper()} raw pixel: ({raw_pixel[0]:.1f}, {raw_pixel[1]:.1f})")
-                print(f"projection error: {error}\n")
-                return
-            field_x, field_z = float(world[0]), float(world[2])
-            inside = -field_length / 2.0 <= field_x <= field_length / 2.0 and -field_width / 2.0 <= field_z <= field_width / 2.0
-            marker = {"id": len(markers) + 1, "lens": lens_name, "raw": (float(raw_pixel[0]), float(raw_pixel[1])), "x": field_x, "z": field_z, "inside": inside}
-            markers.append(marker)
-            print(f"#{marker['id']:02d} {lens_name.upper()}")
-            print(f"raw pixel: ({raw_pixel[0]:.1f}, {raw_pixel[1]:.1f})")
-            print(f"field: X={field_x:.3f} m, Z={field_z:.3f} m")
-            print(f"inside field: {'YES' if inside else 'NO'}\n")
-            refresh()
+        resolved = resolve_lens_at_canvas(click_x, click_y, images)
+        if resolved is None:
             return
+        lens_name, raw_pixel, _panel = resolved
+        if args.debug_clicks:
+            print(f"canvas click: ({click_x:.1f}, {click_y:.1f}) -> {lens_name.upper()} raw: ({raw_pixel[0]:.1f}, {raw_pixel[1]:.1f})")
+        try:
+            world = pixel_to_field(raw_pixel, lenses[lens_name]["K"], lenses[lens_name]["distortion"], lenses[lens_name]["lens2camera"], camera2world)
+        except RuntimeError as error:
+            print(f"{lens_name.upper()} raw pixel: ({raw_pixel[0]:.1f}, {raw_pixel[1]:.1f})")
+            print(f"projection error: {error}\n")
+            return
+        field_x, field_z = float(world[0]), float(world[2])
+        inside = -field_length / 2.0 <= field_x <= field_length / 2.0 and -field_width / 2.0 <= field_z <= field_width / 2.0
+        marker = {"id": len(markers) + 1, "lens": lens_name, "raw": (float(raw_pixel[0]), float(raw_pixel[1])), "x": field_x, "z": field_z, "inside": inside}
+        markers.append(marker)
+        print(f"#{marker['id']:02d} {lens_name.upper()}")
+        print(f"raw pixel: ({raw_pixel[0]:.1f}, {raw_pixel[1]:.1f})")
+        print(f"field: X={field_x:.3f} m, Z={field_z:.3f} m")
+        print(f"inside field: {'YES' if inside else 'NO'}\n")
+        refresh()
 
     window_flags = cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO
     cv2.namedWindow(WINDOW_NAME, window_flags)

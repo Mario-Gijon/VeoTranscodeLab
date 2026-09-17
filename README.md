@@ -10,7 +10,9 @@ python scripts/interactive_field_debug.py
 
 It shows the left and right raw lens images independently above a metric
 top-down football pitch. Click either lens to inspect its raw pixel and
-recovered field point. Press `c` to clear, `z` to undo, or `q`/Escape to quit.
+recovered field point. A fine transient crosshair follows the mouse over the
+actual lens image and displays its RAW coordinates. Press `c` to clear, `z`
+to undo, or `q`/Escape to quit.
 
 It can also split a stacked Veo frame internally:
 
