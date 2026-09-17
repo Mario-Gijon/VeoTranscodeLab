@@ -149,6 +149,25 @@ def panel_to_raw(click_x, click_y, image, panel):
     return np.array([(click_x - x) * raw_width / width, (click_y - y) * raw_height / height], dtype=np.float64)
 
 
+def display_to_canvas(click_x, click_y, canvas_shape):
+    """Convert a HighGUI window coordinate to the fixed rendered canvas."""
+    canvas_height, canvas_width = canvas_shape[:2]
+    _, _, display_width, display_height = cv2.getWindowImageRect(WINDOW_NAME)
+    if display_width <= 0 or display_height <= 0:
+        return None
+
+    scale = min(display_width / canvas_width, display_height / canvas_height)
+    image_width = canvas_width * scale
+    image_height = canvas_height * scale
+    offset_x = (display_width - image_width) / 2.0
+    offset_y = (display_height - image_height) / 2.0
+    canvas_x = (click_x - offset_x) / scale
+    canvas_y = (click_y - offset_y) / scale
+    if not (0 <= canvas_x < canvas_width and 0 <= canvas_y < canvas_height):
+        return None
+    return canvas_x, canvas_y
+
+
 def render(images, field_length, field_width, markers):
     canvas_width = 2 * MARGIN + 2 * LENS_WIDTH + PANEL_GAP
     pitch_width = canvas_width - 2 * MARGIN
@@ -186,15 +205,22 @@ def main() -> None:
     images = load_lens_images(args.stacked, args.left, args.right)
     lenses, camera2world, field_length, field_width = load_calibration(args.calibration)
     markers: list[dict] = []
+    viewer_frame = render(images, field_length, field_width, markers)
 
     def refresh():
-        cv2.imshow(WINDOW_NAME, render(images, field_length, field_width, markers))
+        nonlocal viewer_frame
+        viewer_frame = render(images, field_length, field_width, markers)
+        cv2.imshow(WINDOW_NAME, viewer_frame)
 
     def on_click(event, click_x, click_y, _flags, _userdata):
         if event != cv2.EVENT_LBUTTONDOWN:
             return
+        canvas_pixel = display_to_canvas(click_x, click_y, viewer_frame.shape)
+        if canvas_pixel is None:
+            return
+        canvas_x, canvas_y = canvas_pixel
         for lens_name in ("left", "right"):
-            raw_pixel = panel_to_raw(click_x, click_y, images[lens_name], lens_panel_rect(lens_name))
+            raw_pixel = panel_to_raw(canvas_x, canvas_y, images[lens_name], lens_panel_rect(lens_name))
             if raw_pixel is None:
                 continue
             try:
@@ -214,7 +240,9 @@ def main() -> None:
             refresh()
             return
 
-    cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_AUTOSIZE)
+    window_flags = cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO
+    cv2.namedWindow(WINDOW_NAME, window_flags)
+    cv2.resizeWindow(WINDOW_NAME, 1500, 900)
     cv2.setMouseCallback(WINDOW_NAME, on_click)
     refresh()
     print("Click either lens. Press C to clear, Z to undo, or Q/Escape to quit.")
