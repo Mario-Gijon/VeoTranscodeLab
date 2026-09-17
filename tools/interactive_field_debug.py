@@ -160,6 +160,7 @@ def draw_validation_pitch(
     transform: PitchTransform,
     selected_landmark: dict,
     observations: list[dict],
+    candidate: dict | None = None,
 ):
     """Overlay the selected expected point and recorded validation points."""
     expected = transform.point(selected_landmark["x"], selected_landmark["z"])
@@ -173,6 +174,12 @@ def draw_validation_pitch(
         recovered_point = transform.point(recovered_x, recovered_z)
         cv2.line(canvas, expected_point, recovered_point, (255, 180, 0), 2, cv2.LINE_AA)
         cv2.circle(canvas, recovered_point, 6, (0, 165, 255), 2, cv2.LINE_AA)
+
+    if candidate is not None:
+        expected_point = transform.point(selected_landmark["x"], selected_landmark["z"])
+        recovered_point = transform.point(candidate["recovered_x"], candidate["recovered_z"])
+        cv2.line(canvas, expected_point, recovered_point, (0, 255, 255), 3, cv2.LINE_AA)
+        cv2.drawMarker(canvas, recovered_point, (0, 255, 255), cv2.MARKER_STAR, 22, 3)
 
     cv2.putText(
         canvas,
@@ -298,6 +305,7 @@ def render(
     validation_mode=False,
     selected_landmark=None,
     validation_observations=None,
+    validation_candidate=None,
 ):
     canvas_width = 2 * MARGIN + 2 * LENS_WIDTH + PANEL_GAP
     pitch_width = int(round(
@@ -321,6 +329,19 @@ def render(
                 color = (0, 220, 255) if marker["inside"] else (0, 70, 255)
                 cv2.drawMarker(canvas, point, color, cv2.MARKER_CROSS, 20, 3)
                 cv2.putText(canvas, f"#{marker['id']}", (point[0] + 10, point[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
+        if validation_candidate is not None and validation_candidate["lens"] == lens_name:
+            candidate_point = raw_to_panel(validation_candidate["raw"], images[lens_name], panel)
+            cv2.drawMarker(canvas, candidate_point, (0, 255, 255), cv2.MARKER_STAR, 32, 3)
+            cv2.putText(
+                canvas,
+                f"CANDIDATE u={validation_candidate['raw'][0]:.1f} v={validation_candidate['raw'][1]:.1f}",
+                (candidate_point[0] + 14, candidate_point[1] - 14),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (0, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
     if hover is not None:
         draw_precision_crosshair(
             canvas,
@@ -341,18 +362,39 @@ def render(
     transform = PitchTransform(pitch_x, pitch_y, pitch_width, pitch_height, field_length, field_width)
     draw_pitch(canvas, transform, markers)
     if validation_mode and selected_landmark is not None:
-        draw_validation_pitch(canvas, transform, selected_landmark, validation_observations or [])
+        draw_validation_pitch(
+            canvas,
+            transform,
+            selected_landmark,
+            validation_observations or [],
+            validation_candidate,
+        )
+        if validation_candidate is None:
+            candidate_text = "No candidate | click a lens"
+        else:
+            candidate_text = (
+                f"CANDIDATE {validation_candidate['lens'].upper()} "
+                f"raw=({validation_candidate['raw'][0]:.1f}, {validation_candidate['raw'][1]:.1f}) "
+                f"recovered X={validation_candidate['recovered_x']:.3f} "
+                f"Z={validation_candidate['recovered_z']:.3f} "
+                f"expected X={selected_landmark['x']:.3f} Z={selected_landmark['z']:.3f} "
+                f"error={validation_candidate['error_m']:.3f} m"
+            )
         cv2.putText(
             canvas,
-            f"VALIDATION: {selected_landmark['name']} (N/P landmark) | S save | V free mode",
+            f"VALIDATION ON | {selected_landmark['name']} | expected X={selected_landmark['x']:.3f} Z={selected_landmark['z']:.3f}",
             (MARGIN, 18),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
+            0.5,
             (255, 0, 255),
             2,
             cv2.LINE_AA,
         )
-    cv2.putText(canvas, "Click either lens | C clear | Z undo | V validation | Q/Esc quit", (MARGIN, canvas_height - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (235, 235, 235), 1, cv2.LINE_AA)
+        cv2.putText(canvas, candidate_text, (MARGIN, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.43, (0, 255, 255), 1, cv2.LINE_AA)
+        help_text = "VALIDATION | N/P landmark | click candidate | arrows adjust | ENTER confirm | S save | V exit"
+    else:
+        help_text = "Click either lens | C clear | Z undo | V validation | Q/Esc quit"
+    cv2.putText(canvas, help_text, (MARGIN, canvas_height - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (235, 235, 235), 1, cv2.LINE_AA)
     return canvas
 
 
@@ -367,6 +409,29 @@ def adjust_hover(hover, images, delta_u, delta_v):
     raw_pixel = (raw_u, raw_v)
     panel_pixel = raw_to_panel(raw_pixel, image, hover["panel"])
     return {**hover, "raw": raw_pixel, "canvas": panel_pixel}
+
+
+def make_validation_candidate(
+    calibration: VeoCalibration,
+    landmark: dict,
+    lens_name: str,
+    raw_pixel,
+    panel,
+    canvas_pixel,
+) -> dict:
+    """Create a temporary validation candidate using canonical geometry."""
+    recovered = calibration.pixel_to_field(lens_name, raw_pixel)
+    recovered_x, recovered_z = float(recovered[0]), float(recovered[1])
+    error_m = math.hypot(recovered_x - landmark["x"], recovered_z - landmark["z"])
+    return {
+        "lens": lens_name,
+        "raw": (float(raw_pixel[0]), float(raw_pixel[1])),
+        "panel": panel,
+        "canvas": canvas_pixel,
+        "recovered_x": recovered_x,
+        "recovered_z": recovered_z,
+        "error_m": error_m,
+    }
 
 
 def save_validation(
@@ -415,6 +480,7 @@ def main() -> None:
     validation_observations: list[dict] = []
     validation_mode = False
     selected_landmark_index = 0
+    validation_candidate = None
     hover = None
     viewer_frame = render(
         images,
@@ -425,6 +491,7 @@ def main() -> None:
         validation_mode,
         landmarks[selected_landmark_index],
         validation_observations,
+        validation_candidate,
     )
 
     def refresh():
@@ -438,11 +505,12 @@ def main() -> None:
             validation_mode,
             landmarks[selected_landmark_index],
             validation_observations,
+            validation_candidate,
         )
         cv2.imshow(WINDOW_NAME, viewer_frame)
 
     def on_click(event, click_x, click_y, _flags, _userdata):
-        nonlocal hover
+        nonlocal hover, validation_candidate
         if event == cv2.EVENT_MOUSEMOVE:
             resolved = resolve_lens_at_canvas(click_x, click_y, images)
             next_hover = None
@@ -470,6 +538,22 @@ def main() -> None:
             raw_pixel = np.array(hover["raw"], dtype=np.float64)
         if args.debug_clicks:
             print(f"canvas click: ({click_x:.1f}, {click_y:.1f}) -> {lens_name.upper()} raw: ({raw_pixel[0]:.1f}, {raw_pixel[1]:.1f})")
+        if validation_mode:
+            landmark = landmarks[selected_landmark_index]
+            try:
+                validation_candidate = make_validation_candidate(
+                    calibration,
+                    landmark,
+                    lens_name,
+                    raw_pixel,
+                    panel,
+                    (click_x, click_y),
+                )
+            except RuntimeError as error:
+                print(f"{lens_name.upper()} raw pixel: ({raw_pixel[0]:.1f}, {raw_pixel[1]:.1f})")
+                print(f"projection error: {error}\n")
+            refresh()
+            return
         try:
             field = calibration.pixel_to_field(lens_name, raw_pixel)
         except RuntimeError as error:
@@ -477,27 +561,6 @@ def main() -> None:
             print(f"projection error: {error}\n")
             return
         field_x, field_z = float(field[0]), float(field[1])
-        if validation_mode:
-            landmark = landmarks[selected_landmark_index]
-            expected_x, expected_z = landmark["x"], landmark["z"]
-            error_m = math.hypot(field_x - expected_x, field_z - expected_z)
-            validation_observations.append(
-                {
-                    "landmark": landmark["name"],
-                    "lens": lens_name,
-                    "raw_pixel": [float(raw_pixel[0]), float(raw_pixel[1])],
-                    "expected_field": [expected_x, expected_z],
-                    "recovered_field": [field_x, field_z],
-                    "error_m": error_m,
-                }
-            )
-            print(f"LANDMARK {lens_name.upper()}")
-            print(f"raw:       ({raw_pixel[0]:.1f}, {raw_pixel[1]:.1f})")
-            print(f"expected:  X={expected_x:.3f} Z={expected_z:.3f}")
-            print(f"recovered: X={field_x:.3f} Z={field_z:.3f}")
-            print(f"error:     {error_m:.3f} m\n")
-            refresh()
-            return
         inside = calibration.is_inside_field(field)
         marker = {"id": len(markers) + 1, "lens": lens_name, "raw": (float(raw_pixel[0]), float(raw_pixel[1])), "x": field_x, "z": field_z, "inside": inside}
         markers.append(marker)
@@ -520,13 +583,36 @@ def main() -> None:
             break
         if key_low in (ord("v"), ord("V")):
             validation_mode = not validation_mode
+            validation_candidate = None
             print("Validation mode ON" if validation_mode else "Free-click mode ON")
             refresh()
         if validation_mode and key_low in (ord("n"), ord("N")):
             selected_landmark_index = (selected_landmark_index + 1) % len(landmarks)
+            validation_candidate = None
             refresh()
         if validation_mode and key_low in (ord("p"), ord("P")):
             selected_landmark_index = (selected_landmark_index - 1) % len(landmarks)
+            validation_candidate = None
+            refresh()
+        if validation_mode and validation_candidate is not None and key in (10, 13):
+            landmark = landmarks[selected_landmark_index]
+            candidate = validation_candidate
+            validation_observations.append(
+                {
+                    "landmark": landmark["name"],
+                    "lens": candidate["lens"],
+                    "raw_pixel": [candidate["raw"][0], candidate["raw"][1]],
+                    "expected_field": [landmark["x"], landmark["z"]],
+                    "recovered_field": [candidate["recovered_x"], candidate["recovered_z"]],
+                    "error_m": candidate["error_m"],
+                }
+            )
+            print(f"LANDMARK {candidate['lens'].upper()}")
+            print(f"raw:       ({candidate['raw'][0]:.1f}, {candidate['raw'][1]:.1f})")
+            print(f"expected:  X={landmark['x']:.3f} Z={landmark['z']:.3f}")
+            print(f"recovered: X={candidate['recovered_x']:.3f} Z={candidate['recovered_z']:.3f}")
+            print(f"error:     {candidate['error_m']:.3f} m\n")
+            validation_candidate = None
             refresh()
         if key_low in (ord("s"), ord("S")):
             save_validation(args.validation_out, args.calibration, calibration, args, validation_observations)
@@ -541,7 +627,21 @@ def main() -> None:
             65361: (-1, 0), 65363: (1, 0), 65362: (0, -1), 65364: (0, 1),
             2424832: (-1, 0), 2555904: (1, 0), 2490368: (0, -1), 2621440: (0, 1),
         }.get(key)
-        if arrow_delta is not None and hover is not None:
+        if validation_mode and validation_candidate is not None and arrow_delta is not None:
+            adjusted_candidate = adjust_hover(validation_candidate, images, *arrow_delta)
+            try:
+                validation_candidate = make_validation_candidate(
+                    calibration,
+                    landmarks[selected_landmark_index],
+                    adjusted_candidate["lens"],
+                    adjusted_candidate["raw"],
+                    adjusted_candidate["panel"],
+                    adjusted_candidate["canvas"],
+                )
+            except RuntimeError as error:
+                print(f"projection error: {error}\n")
+            refresh()
+        elif arrow_delta is not None and hover is not None:
             hover = adjust_hover(hover, images, *arrow_delta)
             refresh()
     cv2.destroyAllWindows()

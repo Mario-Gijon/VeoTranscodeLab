@@ -29,21 +29,26 @@ quit.
 
 Validation Mode
 
-Press `v` to toggle Validation Mode. The selected pitch landmark and its
-expected `X,Z` coordinate are highlighted on the pitch. Use `n`/`p` to move to
-the next/previous landmark, then click the exact landmark location in either
-RAW lens panel using the magnifier and optional arrow-key adjustment. Each
-click records a separate observation and prints the expected coordinate,
-canonical recovered coordinate, and Euclidean error. Press `s` to save the
-observations as JSON; provide the output path when starting the viewer:
+Press `v` to toggle Validation Mode. The UI shows `VALIDATION ON`, the selected
+landmark, and its expected `X,Z` coordinate. Use `n`/`p` to move to the
+next/previous landmark, then click the exact landmark location in either RAW
+lens panel using the magnifier. A click creates a temporary candidate; its RAW
+pixel, canonical recovered coordinate, expected coordinate, error, image
+marker, and pitch segment are shown immediately. Use the arrow keys to adjust
+the candidate by one RAW pixel at a time, then press `Enter` to confirm it.
+Only confirmed candidates are recorded and printed. Press `s` to save all
+confirmed observations as JSON; provide the output path when starting the
+viewer:
 
 ```bash
 python tools/interactive_field_debug.py \
   --validation-out output/validation/match2.json
 ```
 
+Pressing `n`/`p` clears an unconfirmed candidate before changing landmarks.
 Validation observations are append-only, so repeated selections of the same
-landmark and lens are retained.
+landmark and lens are retained. The on-screen help is:
+`VALIDATION | N/P landmark | click candidate | arrows adjust | ENTER confirm | S save | V exit`.
 
 To split a stacked Veo frame internally:
 
