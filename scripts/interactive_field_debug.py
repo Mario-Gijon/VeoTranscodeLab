@@ -22,6 +22,9 @@ MARGIN, HEADER_HEIGHT, LENS_WIDTH, LENS_HEIGHT, PANEL_GAP, PITCH_GAP = 20, 34, 1
 PITCH_HEIGHT = 270
 PITCH_MARGIN_METERS = 8.0
 PANEL_BORDER = 2
+MAGNIFIER_RAW_SIZE = 31
+MAGNIFIER_SCALE = 10
+MAGNIFIER_MARGIN = 8
 
 
 def load_calibration(calibration_path: Path):
@@ -182,6 +185,60 @@ def draw_precision_crosshair(canvas, canvas_x, canvas_y, lens_name, raw_pixel, p
                 0.48, color, 1, cv2.LINE_AA)
 
 
+def magnifier_position(canvas_x, canvas_y, panel, size):
+    """Choose a panel corner that does not cover the current target."""
+    panel_x, panel_y, panel_width, panel_height = panel
+    candidates = (
+        (panel_x + panel_width - size - MAGNIFIER_MARGIN, panel_y + MAGNIFIER_MARGIN),
+        (panel_x + MAGNIFIER_MARGIN, panel_y + MAGNIFIER_MARGIN),
+        (panel_x + panel_width - size - MAGNIFIER_MARGIN, panel_y + panel_height - size - MAGNIFIER_MARGIN),
+        (panel_x + MAGNIFIER_MARGIN, panel_y + panel_height - size - MAGNIFIER_MARGIN),
+    )
+    for x, y in candidates:
+        if not (x - 16 <= canvas_x <= x + size + 16 and y - 16 <= canvas_y <= y + size + 16):
+            return x, y
+    return candidates[0]
+
+
+def draw_magnifier(canvas, image, panel, lens_name, raw_pixel, canvas_pixel):
+    """Draw a nearest-neighbor view of the original RAW pixels."""
+    raw_height, raw_width = image.shape[:2]
+    center_u, center_v = int(round(raw_pixel[0])), int(round(raw_pixel[1]))
+    half = MAGNIFIER_RAW_SIZE // 2
+    x0, y0 = center_u - half, center_v - half
+    x1, y1 = x0 + MAGNIFIER_RAW_SIZE, y0 + MAGNIFIER_RAW_SIZE
+
+    source_x0, source_y0 = max(0, x0), max(0, y0)
+    source_x1, source_y1 = min(raw_width, x1), min(raw_height, y1)
+    crop = image[source_y0:source_y1, source_x0:source_x1]
+    crop = cv2.copyMakeBorder(
+        crop,
+        source_y0 - y0,
+        y1 - source_y1,
+        source_x0 - x0,
+        x1 - source_x1,
+        cv2.BORDER_REPLICATE,
+    )
+    size = MAGNIFIER_RAW_SIZE * MAGNIFIER_SCALE
+    enlarged = cv2.resize(crop, (size, size), interpolation=cv2.INTER_NEAREST)
+    magnifier_x, magnifier_y = magnifier_position(canvas_pixel[0], canvas_pixel[1], panel, size)
+    canvas[magnifier_y:magnifier_y + size, magnifier_x:magnifier_x + size] = enlarged
+    cv2.rectangle(canvas, (magnifier_x, magnifier_y),
+                  (magnifier_x + size, magnifier_y + size), (255, 255, 255), 2)
+
+    cross_x = magnifier_x + int(round((raw_pixel[0] - x0) * MAGNIFIER_SCALE))
+    cross_y = magnifier_y + int(round((raw_pixel[1] - y0) * MAGNIFIER_SCALE))
+    color = (0, 255, 255)
+    gap, arm = 5, 24
+    cv2.line(canvas, (cross_x - arm, cross_y), (cross_x - gap, cross_y), color, 1, cv2.LINE_AA)
+    cv2.line(canvas, (cross_x + gap, cross_y), (cross_x + arm, cross_y), color, 1, cv2.LINE_AA)
+    cv2.line(canvas, (cross_x, cross_y - arm), (cross_x, cross_y - gap), color, 1, cv2.LINE_AA)
+    cv2.line(canvas, (cross_x, cross_y + gap), (cross_x, cross_y + arm), color, 1, cv2.LINE_AA)
+    cv2.putText(canvas, f"{lens_name.upper()}  u={raw_pixel[0]:.1f} v={raw_pixel[1]:.1f}",
+                (magnifier_x, magnifier_y + size + 18), cv2.FONT_HERSHEY_SIMPLEX,
+                0.5, color, 1, cv2.LINE_AA)
+
+
 def render(images, field_length, field_width, markers, hover=None):
     canvas_width = 2 * MARGIN + 2 * LENS_WIDTH + PANEL_GAP
     pitch_width = int(round(
@@ -214,10 +271,31 @@ def render(images, field_length, field_width, markers, hover=None):
             hover["raw"],
             hover["panel"],
         )
+        draw_magnifier(
+            canvas,
+            images[hover["lens"]],
+            hover["panel"],
+            hover["lens"],
+            hover["raw"],
+            hover["canvas"],
+        )
     transform = PitchTransform(pitch_x, pitch_y, pitch_width, pitch_height, field_length, field_width)
     draw_pitch(canvas, transform, markers)
     cv2.putText(canvas, "Click either lens | C clear | Z undo | Q/Esc quit", (MARGIN, canvas_height - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (235, 235, 235), 1, cv2.LINE_AA)
     return canvas
+
+
+def adjust_hover(hover, images, delta_u, delta_v):
+    """Move the active precision cursor by exact RAW-pixel increments."""
+    if hover is None:
+        return None
+    image = images[hover["lens"]]
+    raw_height, raw_width = image.shape[:2]
+    raw_u = max(0.0, min(raw_width - 1.0, hover["raw"][0] + delta_u))
+    raw_v = max(0.0, min(raw_height - 1.0, hover["raw"][1] + delta_v))
+    raw_pixel = (raw_u, raw_v)
+    panel_pixel = raw_to_panel(raw_pixel, image, hover["panel"])
+    return {**hover, "raw": raw_pixel, "canvas": panel_pixel}
 
 
 def main() -> None:
@@ -263,7 +341,11 @@ def main() -> None:
         resolved = resolve_lens_at_canvas(click_x, click_y, images)
         if resolved is None:
             return
-        lens_name, raw_pixel, _panel = resolved
+        lens_name, raw_pixel, panel = resolved
+        if hover is not None and hover["lens"] == lens_name:
+            # Arrow-key refinement changes the active precision cursor without
+            # moving the native mouse, so confirmation uses that exact RAW point.
+            raw_pixel = np.array(hover["raw"], dtype=np.float64)
         if args.debug_clicks:
             print(f"canvas click: ({click_x:.1f}, {click_y:.1f}) -> {lens_name.upper()} raw: ({raw_pixel[0]:.1f}, {raw_pixel[1]:.1f})")
         try:
@@ -289,14 +371,23 @@ def main() -> None:
     refresh()
     print("Click either lens. Press C to clear, Z to undo, or Q/Escape to quit.")
     while True:
-        key = cv2.waitKey(20) & 0xFF
-        if key in (ord("q"), 27):
+        key = cv2.waitKeyEx(20)
+        key_low = key & 0xFF
+        if key in (ord("q"), ord("Q"), 27):
             break
-        if key == ord("c"):
+        if key_low in (ord("c"), ord("C")):
             markers.clear()
             refresh()
-        if key == ord("z") and markers:
+        if key_low in (ord("z"), ord("Z")) and markers:
             markers.pop()
+            refresh()
+        arrow_delta = {
+            81: (-1, 0), 83: (1, 0), 82: (0, -1), 84: (0, 1),
+            65361: (-1, 0), 65363: (1, 0), 65362: (0, -1), 65364: (0, 1),
+            2424832: (-1, 0), 2555904: (1, 0), 2490368: (0, -1), 2621440: (0, 1),
+        }.get(key)
+        if arrow_delta is not None and hover is not None:
+            hover = adjust_hover(hover, images, *arrow_delta)
             refresh()
     cv2.destroyAllWindows()
 
