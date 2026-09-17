@@ -5,15 +5,18 @@
 import argparse
 import json
 import math
+import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
 
+# The shared validated geometry helper lives with the diagnostics scripts.
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "diagnostics"))
 from test_pixel_to_field import parse_matrix, parse_vector, pixel_to_field
 
 
-ROOT = Path(__file__).resolve().parents[1]
 CALIBRATION_PATH = ROOT / "data" / "camera_alignment-67a3f0b3-002e-491c-a48c-298f6f0160d1.veo"
 LEFT_PATH = ROOT / "samples" / "left_frame.jpg"
 RIGHT_PATH = ROOT / "samples" / "right_frame.jpg"

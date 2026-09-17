@@ -1,63 +1,87 @@
 # VeoTranscodeLab
 
+An experimental lab for inspecting Veo calibration, projection, and panorama
+behavior. The repository is organized by purpose:
+
+- `analysis/` — reserved for future core geometry, calibration, optimization,
+  and analysis algorithms.
+- `tools/` — interactive development utilities.
+- `diagnostics/` — calibration, projection, and undistortion inspection
+  scripts.
+- `experiments/panorama/` — experimental panorama and stitching scripts.
+- `data/` — Veo calibration files.
+- `samples/` — input frames and inspection images.
+- `output/` — generated diagnostic and panorama output.
+
 ## Interactive field projection debug
 
-Run the lightweight OpenCV experiment from the repository root:
+Run the dual-lens viewer from the repository root:
 
 ```bash
-python scripts/interactive_field_debug.py
+python tools/interactive_field_debug.py
 ```
 
-It shows the left and right raw lens images independently above a metric
-top-down football pitch. Click either lens to inspect its raw pixel and
-recovered field point. A fine transient crosshair follows the mouse over the
-actual lens image and displays its RAW coordinates. A nearest-neighbor RAW
-pixel magnifier appears beside the current target; use the arrow keys to move
-the precision cursor by one RAW pixel at a time before clicking. Press `c` to
-clear, `z` to undo, or `q`/Escape to quit.
+It displays independent left and right lens images above a metric top-down
+pitch. Hovering over a lens shows a precision crosshair, RAW coordinate label,
+and nearest-neighbor magnifier. Use the arrow keys for one-RAW-pixel
+adjustments before clicking. Press `c` to clear, `z` to undo, or `q`/Escape to
+quit.
 
-It can also split a stacked Veo frame internally:
+To split a stacked Veo frame internally:
 
 ```bash
-python scripts/interactive_field_debug.py --stacked samples/stacked_frame.jpg
+python tools/interactive_field_debug.py \
+  --stacked samples/stacked_frame.jpg
 ```
 
-The pitch uses calibrated field length on world X and field width on world Z.
-This validates the existing pixel-to-ground projection interactively; it does
-not change the calibration math or Veo coordinate conventions.
+## Diagnostics
 
-## Multiple matches
-
-Match 1 keeps the original defaults:
+Match 1 uses the original default paths:
 
 ```bash
-python scripts/test_pixel_to_field.py
-python scripts/test_field_projection.py
+python diagnostics/inspect_calibration.py
+python diagnostics/test_field_projection.py
+python diagnostics/test_pixel_to_field.py
+python diagnostics/test_undistortion.py
 ```
 
-Run Match 2 by supplying its calibration and lens files. The inspection
-outputs are prefixed so Match 1 files are preserved:
+For another recording, provide its calibration and input paths. For example,
+Match 2 inspection and projection validation are:
 
 ```bash
-python scripts/inspect_calibration.py \
+python diagnostics/inspect_calibration.py \
   --calibration data/camera_alignment-d07ae0aa-86a6-4c57-9fa9-c6c34977b616.veo \
   --stacked samples/match2_stacked_frame.jpg \
   --prefix match2
 
-python scripts/test_field_projection.py \
+python diagnostics/test_field_projection.py \
   --calibration data/camera_alignment-d07ae0aa-86a6-4c57-9fa9-c6c34977b616.veo \
   --left samples/match2_left_frame.jpg \
   --right samples/match2_right_frame.jpg \
   --prefix match2
 
-python scripts/test_pixel_to_field.py \
+python diagnostics/test_pixel_to_field.py \
   --calibration data/camera_alignment-d07ae0aa-86a6-4c57-9fa9-c6c34977b616.veo
+```
 
-python scripts/interactive_field_debug.py \
+The Match 2 interactive viewer can use either lens explicitly:
+
+```bash
+python tools/interactive_field_debug.py \
   --calibration data/camera_alignment-d07ae0aa-86a6-4c57-9fa9-c6c34977b616.veo \
   --left samples/match2_left_frame.jpg \
   --right samples/match2_right_frame.jpg \
   --lens left
 ```
 
-Use `--lens right` for the right-lens interactive view.
+Use `--lens right` for the right-lens compatibility option. The viewer always
+shows both independent lens panels.
+
+## Panorama experiments
+
+```bash
+python experiments/panorama/build_panorama.py
+python experiments/panorama/build_ground_aware_panorama.py
+```
+
+These remain experimental and separate from the reserved `analysis/` area.
