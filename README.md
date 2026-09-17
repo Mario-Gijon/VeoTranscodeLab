@@ -5,16 +5,22 @@
 Run the lightweight OpenCV experiment from the repository root:
 
 ```bash
-python scripts/interactive_field_debug.py --lens left
-python scripts/interactive_field_debug.py --lens right
+python scripts/interactive_field_debug.py
 ```
 
-Click pixels in the selected Veo lens image to print their Veo world and
-field coordinates. The companion top-down view plots each projected point,
-with the calibrated field length on world X and field width on world Z.
-Press `c` to clear points or `q`/Escape to quit. This validates the existing
-pixel-to-ground projection interactively; it does not change the calibration
-math or the Veo coordinate conventions.
+It shows the left and right raw lens images independently above a metric
+top-down football pitch. Click either lens to inspect its raw pixel and
+recovered field point. Press `c` to clear, `z` to undo, or `q`/Escape to quit.
+
+It can also split a stacked Veo frame internally:
+
+```bash
+python scripts/interactive_field_debug.py --stacked samples/stacked_frame.jpg
+```
+
+The pitch uses calibrated field length on world X and field width on world Z.
+This validates the existing pixel-to-ground projection interactively; it does
+not change the calibration math or Veo coordinate conventions.
 
 ## Multiple matches
 
