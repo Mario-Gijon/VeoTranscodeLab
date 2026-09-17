@@ -27,6 +27,24 @@ and nearest-neighbor magnifier. Use the arrow keys for one-RAW-pixel
 adjustments before clicking. Press `c` to clear, `z` to undo, or `q`/Escape to
 quit.
 
+Validation Mode
+
+Press `v` to toggle Validation Mode. The selected pitch landmark and its
+expected `X,Z` coordinate are highlighted on the pitch. Use `n`/`p` to move to
+the next/previous landmark, then click the exact landmark location in either
+RAW lens panel using the magnifier and optional arrow-key adjustment. Each
+click records a separate observation and prints the expected coordinate,
+canonical recovered coordinate, and Euclidean error. Press `s` to save the
+observations as JSON; provide the output path when starting the viewer:
+
+```bash
+python tools/interactive_field_debug.py \
+  --validation-out output/validation/match2.json
+```
+
+Validation observations are append-only, so repeated selections of the same
+landmark and lens are retained.
+
 To split a stacked Veo frame internally:
 
 ```bash

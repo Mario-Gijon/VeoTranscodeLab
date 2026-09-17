@@ -3,6 +3,7 @@
 """Dual-lens OpenCV viewer for inspecting Veo pixel-to-field geometry."""
 
 import argparse
+import json
 import math
 import sys
 from pathlib import Path
@@ -31,6 +32,33 @@ MAGNIFIER_MARGIN = 8
 
 def load_calibration(calibration_path: Path) -> VeoCalibration:
     return load_veo_calibration(calibration_path)
+
+
+def validation_landmarks(calibration: VeoCalibration) -> list[dict]:
+    """Build the validation landmark list from the loaded field dimensions."""
+    length, width = calibration.field_length, calibration.field_width
+    half_length, half_width = length / 2.0, width / 2.0
+    return [
+        {"name": "CENTER", "x": 0.0, "z": 0.0},
+        {"name": "HALFWAY_FAR", "x": 0.0, "z": half_width},
+        {"name": "HALFWAY_CLOSE", "x": 0.0, "z": -half_width},
+        {"name": "CENTER_CIRCLE_FAR", "x": 0.0, "z": 9.15},
+        {"name": "CENTER_CIRCLE_CLOSE", "x": 0.0, "z": -9.15},
+        {"name": "LEFT_PENALTY", "x": -half_length + 11.0, "z": 0.0},
+        {"name": "RIGHT_PENALTY", "x": half_length - 11.0, "z": 0.0},
+        {"name": "LEFT_PA_FAR", "x": -half_length + 16.5, "z": 20.16},
+        {"name": "LEFT_PA_CLOSE", "x": -half_length + 16.5, "z": -20.16},
+        {"name": "RIGHT_PA_FAR", "x": half_length - 16.5, "z": 20.16},
+        {"name": "RIGHT_PA_CLOSE", "x": half_length - 16.5, "z": -20.16},
+        {"name": "LEFT_GA_FAR", "x": -half_length + 5.5, "z": 9.16},
+        {"name": "LEFT_GA_CLOSE", "x": -half_length + 5.5, "z": -9.16},
+        {"name": "RIGHT_GA_FAR", "x": half_length - 5.5, "z": 9.16},
+        {"name": "RIGHT_GA_CLOSE", "x": half_length - 5.5, "z": -9.16},
+        {"name": "CL", "x": -half_length, "z": -half_width},
+        {"name": "FL", "x": -half_length, "z": half_width},
+        {"name": "FR", "x": half_length, "z": half_width},
+        {"name": "CR", "x": half_length, "z": -half_width},
+    ]
 
 
 def load_lens_images(stacked_path: Path | None, left_path: Path, right_path: Path):
@@ -125,6 +153,37 @@ def draw_pitch(canvas: np.ndarray, transform: PitchTransform, markers: list[dict
     cv2.putText(canvas, f"Pitch: X={length:.2f} m, Z={width:.2f} m", (transform.x + 12, transform.y + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.65, white, 2, cv2.LINE_AA)
     if omitted:
         cv2.putText(canvas, "Outside pitch view: " + ", ".join(omitted), (transform.x + 12, transform.y + transform.height - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 70, 255), 2, cv2.LINE_AA)
+
+
+def draw_validation_pitch(
+    canvas: np.ndarray,
+    transform: PitchTransform,
+    selected_landmark: dict,
+    observations: list[dict],
+):
+    """Overlay the selected expected point and recorded validation points."""
+    expected = transform.point(selected_landmark["x"], selected_landmark["z"])
+    cv2.circle(canvas, expected, 9, (255, 0, 255), 2, cv2.LINE_AA)
+    cv2.drawMarker(canvas, expected, (255, 0, 255), cv2.MARKER_CROSS, 26, 2)
+
+    for observation in observations:
+        expected_x, expected_z = observation["expected_field"]
+        recovered_x, recovered_z = observation["recovered_field"]
+        expected_point = transform.point(expected_x, expected_z)
+        recovered_point = transform.point(recovered_x, recovered_z)
+        cv2.line(canvas, expected_point, recovered_point, (255, 180, 0), 2, cv2.LINE_AA)
+        cv2.circle(canvas, recovered_point, 6, (0, 165, 255), 2, cv2.LINE_AA)
+
+    cv2.putText(
+        canvas,
+        f"Expected: {selected_landmark['name']} X={selected_landmark['x']:.3f} Z={selected_landmark['z']:.3f}",
+        (transform.x + 12, transform.y + transform.height - 16),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (255, 0, 255),
+        2,
+        cv2.LINE_AA,
+    )
 
 
 def lens_panel_rect(lens_name: str) -> tuple[int, int, int, int]:
@@ -230,7 +289,16 @@ def draw_magnifier(canvas, image, panel, lens_name, raw_pixel, canvas_pixel):
                 0.5, color, 1, cv2.LINE_AA)
 
 
-def render(images, field_length, field_width, markers, hover=None):
+def render(
+    images,
+    field_length,
+    field_width,
+    markers,
+    hover=None,
+    validation_mode=False,
+    selected_landmark=None,
+    validation_observations=None,
+):
     canvas_width = 2 * MARGIN + 2 * LENS_WIDTH + PANEL_GAP
     pitch_width = int(round(
         PITCH_HEIGHT * (field_length + 2 * PITCH_MARGIN_METERS)
@@ -272,7 +340,19 @@ def render(images, field_length, field_width, markers, hover=None):
         )
     transform = PitchTransform(pitch_x, pitch_y, pitch_width, pitch_height, field_length, field_width)
     draw_pitch(canvas, transform, markers)
-    cv2.putText(canvas, "Click either lens | C clear | Z undo | Q/Esc quit", (MARGIN, canvas_height - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (235, 235, 235), 1, cv2.LINE_AA)
+    if validation_mode and selected_landmark is not None:
+        draw_validation_pitch(canvas, transform, selected_landmark, validation_observations or [])
+        cv2.putText(
+            canvas,
+            f"VALIDATION: {selected_landmark['name']} (N/P landmark) | S save | V free mode",
+            (MARGIN, 18),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (255, 0, 255),
+            2,
+            cv2.LINE_AA,
+        )
+    cv2.putText(canvas, "Click either lens | C clear | Z undo | V validation | Q/Esc quit", (MARGIN, canvas_height - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (235, 235, 235), 1, cv2.LINE_AA)
     return canvas
 
 
@@ -289,6 +369,33 @@ def adjust_hover(hover, images, delta_u, delta_v):
     return {**hover, "raw": raw_pixel, "canvas": panel_pixel}
 
 
+def save_validation(
+    output_path: Path | None,
+    calibration_path: Path,
+    calibration: VeoCalibration,
+    args,
+    observations: list[dict],
+):
+    if output_path is None:
+        print("Validation output path not configured; use --validation-out.")
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    source = {
+        "stacked": str(args.stacked) if args.stacked is not None else None,
+        "left": str(args.left),
+        "right": str(args.right),
+    }
+    payload = {
+        "calibration_path": str(calibration_path),
+        "field_length": calibration.field_length,
+        "field_width": calibration.field_width,
+        "source": source,
+        "observations": observations,
+    }
+    output_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    print(f"Saved {len(observations)} validation observation(s) to {output_path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--calibration", type=Path, default=CALIBRATION_PATH)
@@ -297,18 +404,41 @@ def main() -> None:
     parser.add_argument("--stacked", type=Path, help="Optional stacked frame; top and bottom halves become left and right")
     parser.add_argument("--lens", choices=("left", "right"), help="Accepted for compatibility; both lenses are displayed")
     parser.add_argument("--debug-clicks", action="store_true", help="Print canvas and raw click coordinates")
+    parser.add_argument("--validation-out", type=Path, help="JSON output path for validation observations")
     args = parser.parse_args()
 
     images = load_lens_images(args.stacked, args.left, args.right)
     calibration = load_calibration(args.calibration)
     field_length, field_width = calibration.field_length, calibration.field_width
+    landmarks = validation_landmarks(calibration)
     markers: list[dict] = []
+    validation_observations: list[dict] = []
+    validation_mode = False
+    selected_landmark_index = 0
     hover = None
-    viewer_frame = render(images, field_length, field_width, markers, hover)
+    viewer_frame = render(
+        images,
+        field_length,
+        field_width,
+        markers,
+        hover,
+        validation_mode,
+        landmarks[selected_landmark_index],
+        validation_observations,
+    )
 
     def refresh():
         nonlocal viewer_frame
-        viewer_frame = render(images, field_length, field_width, markers, hover)
+        viewer_frame = render(
+            images,
+            field_length,
+            field_width,
+            markers,
+            hover,
+            validation_mode,
+            landmarks[selected_landmark_index],
+            validation_observations,
+        )
         cv2.imshow(WINDOW_NAME, viewer_frame)
 
     def on_click(event, click_x, click_y, _flags, _userdata):
@@ -347,6 +477,27 @@ def main() -> None:
             print(f"projection error: {error}\n")
             return
         field_x, field_z = float(field[0]), float(field[1])
+        if validation_mode:
+            landmark = landmarks[selected_landmark_index]
+            expected_x, expected_z = landmark["x"], landmark["z"]
+            error_m = math.hypot(field_x - expected_x, field_z - expected_z)
+            validation_observations.append(
+                {
+                    "landmark": landmark["name"],
+                    "lens": lens_name,
+                    "raw_pixel": [float(raw_pixel[0]), float(raw_pixel[1])],
+                    "expected_field": [expected_x, expected_z],
+                    "recovered_field": [field_x, field_z],
+                    "error_m": error_m,
+                }
+            )
+            print(f"LANDMARK {lens_name.upper()}")
+            print(f"raw:       ({raw_pixel[0]:.1f}, {raw_pixel[1]:.1f})")
+            print(f"expected:  X={expected_x:.3f} Z={expected_z:.3f}")
+            print(f"recovered: X={field_x:.3f} Z={field_z:.3f}")
+            print(f"error:     {error_m:.3f} m\n")
+            refresh()
+            return
         inside = calibration.is_inside_field(field)
         marker = {"id": len(markers) + 1, "lens": lens_name, "raw": (float(raw_pixel[0]), float(raw_pixel[1])), "x": field_x, "z": field_z, "inside": inside}
         markers.append(marker)
@@ -361,12 +512,24 @@ def main() -> None:
     cv2.resizeWindow(WINDOW_NAME, 1500, 800)
     cv2.setMouseCallback(WINDOW_NAME, on_click)
     refresh()
-    print("Click either lens. Press C to clear, Z to undo, or Q/Escape to quit.")
+    print("Click either lens. Press V for validation mode, C to clear, Z to undo, or Q/Escape to quit.")
     while True:
         key = cv2.waitKeyEx(20)
         key_low = key & 0xFF
         if key in (ord("q"), ord("Q"), 27):
             break
+        if key_low in (ord("v"), ord("V")):
+            validation_mode = not validation_mode
+            print("Validation mode ON" if validation_mode else "Free-click mode ON")
+            refresh()
+        if validation_mode and key_low in (ord("n"), ord("N")):
+            selected_landmark_index = (selected_landmark_index + 1) % len(landmarks)
+            refresh()
+        if validation_mode and key_low in (ord("p"), ord("P")):
+            selected_landmark_index = (selected_landmark_index - 1) % len(landmarks)
+            refresh()
+        if key_low in (ord("s"), ord("S")):
+            save_validation(args.validation_out, args.calibration, calibration, args, validation_observations)
         if key_low in (ord("c"), ord("C")):
             markers.clear()
             refresh()
