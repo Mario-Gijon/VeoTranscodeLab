@@ -3,7 +3,6 @@
 """Dual-lens OpenCV viewer for inspecting Veo pixel-to-field geometry."""
 
 import argparse
-import json
 import math
 import sys
 from pathlib import Path
@@ -11,10 +10,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-# The shared validated geometry helper lives with the diagnostics scripts.
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "diagnostics"))
-from test_pixel_to_field import parse_matrix, parse_vector, pixel_to_field
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from analysis.veo_geometry import VeoCalibration, load_veo_calibration
 
 
 CALIBRATION_PATH = ROOT / "data" / "camera_alignment-67a3f0b3-002e-491c-a48c-298f6f0160d1.veo"
@@ -30,19 +29,8 @@ MAGNIFIER_SCALE = 10
 MAGNIFIER_MARGIN = 8
 
 
-def load_calibration(calibration_path: Path):
-    with calibration_path.open("r", encoding="utf-8") as calibration_file:
-        alignment = json.load(calibration_file)["alignment"]
-    camera2world = parse_matrix(alignment["camera2world"], 4, 4)
-    lenses = {
-        name: {
-            "K": parse_matrix(alignment[f"intrinsic_{name}"], 3, 3),
-            "distortion": parse_vector(alignment[f"distortion_{name}"]),
-            "lens2camera": parse_matrix(alignment[f"lens_{name}2camera"], 4, 4),
-        }
-        for name in ("left", "right")
-    }
-    return lenses, camera2world, float(alignment["field_length"]), float(alignment["field_width"])
+def load_calibration(calibration_path: Path) -> VeoCalibration:
+    return load_veo_calibration(calibration_path)
 
 
 def load_lens_images(stacked_path: Path | None, left_path: Path, right_path: Path):
@@ -312,7 +300,8 @@ def main() -> None:
     args = parser.parse_args()
 
     images = load_lens_images(args.stacked, args.left, args.right)
-    lenses, camera2world, field_length, field_width = load_calibration(args.calibration)
+    calibration = load_calibration(args.calibration)
+    field_length, field_width = calibration.field_length, calibration.field_width
     markers: list[dict] = []
     hover = None
     viewer_frame = render(images, field_length, field_width, markers, hover)
@@ -352,13 +341,13 @@ def main() -> None:
         if args.debug_clicks:
             print(f"canvas click: ({click_x:.1f}, {click_y:.1f}) -> {lens_name.upper()} raw: ({raw_pixel[0]:.1f}, {raw_pixel[1]:.1f})")
         try:
-            world = pixel_to_field(raw_pixel, lenses[lens_name]["K"], lenses[lens_name]["distortion"], lenses[lens_name]["lens2camera"], camera2world)
+            field = calibration.pixel_to_field(lens_name, raw_pixel)
         except RuntimeError as error:
             print(f"{lens_name.upper()} raw pixel: ({raw_pixel[0]:.1f}, {raw_pixel[1]:.1f})")
             print(f"projection error: {error}\n")
             return
-        field_x, field_z = float(world[0]), float(world[2])
-        inside = -field_length / 2.0 <= field_x <= field_length / 2.0 and -field_width / 2.0 <= field_z <= field_width / 2.0
+        field_x, field_z = float(field[0]), float(field[1])
+        inside = calibration.is_inside_field(field)
         marker = {"id": len(markers) + 1, "lens": lens_name, "raw": (float(raw_pixel[0]), float(raw_pixel[1])), "x": field_x, "z": field_z, "inside": inside}
         markers.append(marker)
         print(f"#{marker['id']:02d} {lens_name.upper()}")
