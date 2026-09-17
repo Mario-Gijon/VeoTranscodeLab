@@ -13,32 +13,25 @@ from test_pixel_to_field import parse_matrix, parse_vector, pixel_to_field
 
 
 ROOT = Path(__file__).resolve().parents[1]
-IMAGE_PATHS = {
-    "left": ROOT / "samples" / "left_frame.jpg",
-    "right": ROOT / "samples" / "right_frame.jpg",
-}
+CALIBRATION_PATH = (
+    ROOT
+    / "data"
+    / "camera_alignment-67a3f0b3-002e-491c-a48c-298f6f0160d1.veo"
+)
+LEFT_PATH = ROOT / "samples" / "left_frame.jpg"
+RIGHT_PATH = ROOT / "samples" / "right_frame.jpg"
 IMAGE_WINDOW = "Veo lens image"
 FIELD_WINDOW = "Projected football field"
 FIELD_VIEW_SIZE = (960, 620)  # width, height
 FIELD_MARGIN = 70
 
 
-def find_calibration_path() -> Path:
-    calibration_paths = sorted((ROOT / "data").glob("*.veo"))
-    if len(calibration_paths) != 1:
-        raise RuntimeError(
-            f"Expected exactly one .veo calibration file in {ROOT / 'data'}, "
-            f"found {len(calibration_paths)}"
-        )
-    return calibration_paths[0]
-
-
-def load_configuration(lens_name: str):
-    image = cv2.imread(str(IMAGE_PATHS[lens_name]))
+def load_configuration(lens_name: str, calibration_path: Path, image_path: Path):
+    image = cv2.imread(str(image_path))
     if image is None:
-        raise RuntimeError(f"Could not load {IMAGE_PATHS[lens_name]}")
+        raise RuntimeError(f"Could not load {image_path}")
 
-    with find_calibration_path().open("r", encoding="utf-8") as calibration_file:
+    with calibration_path.open("r", encoding="utf-8") as calibration_file:
         calibration = json.load(calibration_file)
 
     alignment = calibration["alignment"]
@@ -136,10 +129,16 @@ def print_projection(lens_name: str, pixel: np.ndarray, world: np.ndarray,
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--calibration", type=Path, default=CALIBRATION_PATH)
+    parser.add_argument("--left", type=Path, default=LEFT_PATH)
+    parser.add_argument("--right", type=Path, default=RIGHT_PATH)
     parser.add_argument("--lens", choices=("left", "right"), required=True)
     args = parser.parse_args()
 
-    image, lens, camera2world, field_length, field_width = load_configuration(args.lens)
+    image_path = args.left if args.lens == "left" else args.right
+    image, lens, camera2world, field_length, field_width = load_configuration(
+        args.lens, args.calibration, image_path
+    )
     image_view = image.copy()
     projected_points: list[tuple[float, float, bool]] = []
 

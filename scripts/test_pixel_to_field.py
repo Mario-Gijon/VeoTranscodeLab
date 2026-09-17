@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import argparse
 from pathlib import Path
 
 import cv2
@@ -120,7 +121,11 @@ def selected_corner_local(data, lens_name):
 
 
 def main():
-    with open(CALIBRATION_PATH, "r", encoding="utf-8") as f:
+    parser = argparse.ArgumentParser(description="Validate Veo pixel-to-field projection")
+    parser.add_argument("--calibration", type=Path, default=CALIBRATION_PATH)
+    args = parser.parse_args()
+
+    with args.calibration.open("r", encoding="utf-8") as f:
         calibration = json.load(f)
 
     alignment = calibration["alignment"]

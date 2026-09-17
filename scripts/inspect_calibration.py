@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import argparse
 from pathlib import Path
 
 import cv2
@@ -40,10 +41,30 @@ def draw_point(img, x, y, label):
 
 
 def main():
-    frame = cv2.imread(str(FRAME_PATH))
+    parser = argparse.ArgumentParser(description="Inspect selected Veo calibration corners")
+    parser.add_argument("--calibration", type=Path, default=CALIBRATION_PATH)
+    parser.add_argument("--stacked", type=Path, default=FRAME_PATH)
+    parser.add_argument(
+        "--prefix",
+        default="",
+        help="Prefix output filenames, for example match2",
+    )
+    args = parser.parse_args()
+
+    frame_path = args.stacked
+    calibration_path = args.calibration
+    output_prefix = f"{args.prefix}_" if args.prefix else ""
+    output_dir = frame_path.parent
+    stacked_output = output_dir / f"{output_prefix}stacked_with_corners.jpg"
+    left_output = output_dir / f"{output_prefix}left_frame.jpg"
+    right_output = output_dir / f"{output_prefix}right_frame.jpg"
+    left_corners_output = output_dir / f"{output_prefix}left_with_corners.jpg"
+    right_corners_output = output_dir / f"{output_prefix}right_with_corners.jpg"
+
+    frame = cv2.imread(str(frame_path))
 
     if frame is None:
-        raise RuntimeError(f"Could not read {FRAME_PATH}")
+        raise RuntimeError(f"Could not read {frame_path}")
 
     h, w = frame.shape[:2]
 
@@ -57,7 +78,7 @@ def main():
     left = frame[:split_y].copy()
     right = frame[split_y:].copy()
 
-    with open(CALIBRATION_PATH, "r", encoding="utf-8") as f:
+    with calibration_path.open("r", encoding="utf-8") as f:
         calibration = json.load(f)
 
     corners = calibration["selected_corners"]["corners_stacked"]
@@ -116,18 +137,18 @@ def main():
                     name.upper(),
                 )
 
-    cv2.imwrite(str(STACKED_OUTPUT), stacked_debug)
-    cv2.imwrite(str(LEFT_OUTPUT), left)
-    cv2.imwrite(str(RIGHT_OUTPUT), right)
-    cv2.imwrite(str(LEFT_CORNERS_OUTPUT), left_debug)
-    cv2.imwrite(str(RIGHT_CORNERS_OUTPUT), right_debug)
+    cv2.imwrite(str(stacked_output), stacked_debug)
+    cv2.imwrite(str(left_output), left)
+    cv2.imwrite(str(right_output), right)
+    cv2.imwrite(str(left_corners_output), left_debug)
+    cv2.imwrite(str(right_corners_output), right_debug)
 
     print()
-    print(f"Saved: {STACKED_OUTPUT}")
-    print(f"Saved: {LEFT_OUTPUT}")
-    print(f"Saved: {RIGHT_OUTPUT}")
-    print(f"Saved: {LEFT_CORNERS_OUTPUT}")
-    print(f"Saved: {RIGHT_CORNERS_OUTPUT}")
+    print(f"Saved: {stacked_output}")
+    print(f"Saved: {left_output}")
+    print(f"Saved: {right_output}")
+    print(f"Saved: {left_corners_output}")
+    print(f"Saved: {right_corners_output}")
 
 
 if __name__ == "__main__":

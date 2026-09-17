@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import argparse
 from pathlib import Path
 
 import cv2
@@ -149,9 +150,20 @@ def draw_cross(
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Validate Veo field projection")
+    parser.add_argument("--calibration", type=Path, default=CALIBRATION_PATH)
+    parser.add_argument("--left", type=Path, default=LEFT_PATH)
+    parser.add_argument("--right", type=Path, default=RIGHT_PATH)
+    parser.add_argument(
+        "--prefix",
+        default="",
+        help="Prefix output filenames, for example match2",
+    )
+    args = parser.parse_args()
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    with open(CALIBRATION_PATH, "r", encoding="utf-8") as f:
+    with args.calibration.open("r", encoding="utf-8") as f:
         calibration = json.load(f)
 
     alignment = calibration["alignment"]
@@ -186,7 +198,7 @@ def main():
 
     lens_data = {
         "left": {
-            "image": cv2.imread(str(LEFT_PATH)),
+            "image": cv2.imread(str(args.left)),
             "lens2camera": parse_matrix(
                 alignment["lens_left2camera"],
                 4,
@@ -202,7 +214,7 @@ def main():
             ),
         },
         "right": {
-            "image": cv2.imread(str(RIGHT_PATH)),
+            "image": cv2.imread(str(args.right)),
             "lens2camera": parse_matrix(
                 alignment["lens_right2camera"],
                 4,
@@ -291,7 +303,8 @@ def main():
     print(f"Max error:  {np.max(errors):.2f}px")
 
     for lens_name, lens in lens_data.items():
-        output = OUTPUT_DIR / f"{lens_name}_field_projection.jpg"
+        prefix = f"{args.prefix}_" if args.prefix else ""
+        output = OUTPUT_DIR / f"{prefix}{lens_name}_field_projection.jpg"
 
         cv2.imwrite(
             str(output),
