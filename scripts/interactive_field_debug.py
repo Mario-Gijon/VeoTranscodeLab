@@ -18,7 +18,8 @@ CALIBRATION_PATH = ROOT / "data" / "camera_alignment-67a3f0b3-002e-491c-a48c-298
 LEFT_PATH = ROOT / "samples" / "left_frame.jpg"
 RIGHT_PATH = ROOT / "samples" / "right_frame.jpg"
 WINDOW_NAME = "Veo dual-lens field debug"
-MARGIN, HEADER_HEIGHT, LENS_WIDTH, LENS_HEIGHT, PANEL_GAP, PITCH_GAP = 20, 34, 760, 380, 20, 26
+MARGIN, HEADER_HEIGHT, LENS_WIDTH, LENS_HEIGHT, PANEL_GAP, PITCH_GAP = 20, 34, 1040, 520, 20, 26
+PITCH_HEIGHT = 270
 PITCH_MARGIN_METERS = 8.0
 
 
@@ -149,29 +150,14 @@ def panel_to_raw(click_x, click_y, image, panel):
     return np.array([(click_x - x) * raw_width / width, (click_y - y) * raw_height / height], dtype=np.float64)
 
 
-def display_to_canvas(click_x, click_y, canvas_shape):
-    """Convert a HighGUI window coordinate to the fixed rendered canvas."""
-    canvas_height, canvas_width = canvas_shape[:2]
-    _, _, display_width, display_height = cv2.getWindowImageRect(WINDOW_NAME)
-    if display_width <= 0 or display_height <= 0:
-        return None
-
-    scale = min(display_width / canvas_width, display_height / canvas_height)
-    image_width = canvas_width * scale
-    image_height = canvas_height * scale
-    offset_x = (display_width - image_width) / 2.0
-    offset_y = (display_height - image_height) / 2.0
-    canvas_x = (click_x - offset_x) / scale
-    canvas_y = (click_y - offset_y) / scale
-    if not (0 <= canvas_x < canvas_width and 0 <= canvas_y < canvas_height):
-        return None
-    return canvas_x, canvas_y
-
-
 def render(images, field_length, field_width, markers):
     canvas_width = 2 * MARGIN + 2 * LENS_WIDTH + PANEL_GAP
-    pitch_width = canvas_width - 2 * MARGIN
-    pitch_height = int(round(pitch_width * (field_width + 2 * PITCH_MARGIN_METERS) / (field_length + 2 * PITCH_MARGIN_METERS)))
+    pitch_width = int(round(
+        PITCH_HEIGHT * (field_length + 2 * PITCH_MARGIN_METERS)
+        / (field_width + 2 * PITCH_MARGIN_METERS)
+    ))
+    pitch_x = (canvas_width - pitch_width) // 2
+    pitch_height = PITCH_HEIGHT
     pitch_y = HEADER_HEIGHT + LENS_HEIGHT + PITCH_GAP
     canvas_height = pitch_y + pitch_height + MARGIN
     canvas = np.full((canvas_height, canvas_width, 3), 24, dtype=np.uint8)
@@ -187,7 +173,7 @@ def render(images, field_length, field_width, markers):
                 color = (0, 220, 255) if marker["inside"] else (0, 70, 255)
                 cv2.drawMarker(canvas, point, color, cv2.MARKER_CROSS, 20, 3)
                 cv2.putText(canvas, f"#{marker['id']}", (point[0] + 10, point[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
-    transform = PitchTransform(MARGIN, pitch_y, pitch_width, pitch_height, field_length, field_width)
+    transform = PitchTransform(pitch_x, pitch_y, pitch_width, pitch_height, field_length, field_width)
     draw_pitch(canvas, transform, markers)
     cv2.putText(canvas, "Click either lens | C clear | Z undo | Q/Esc quit", (MARGIN, canvas_height - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (235, 235, 235), 1, cv2.LINE_AA)
     return canvas
@@ -200,6 +186,7 @@ def main() -> None:
     parser.add_argument("--right", type=Path, default=RIGHT_PATH)
     parser.add_argument("--stacked", type=Path, help="Optional stacked frame; top and bottom halves become left and right")
     parser.add_argument("--lens", choices=("left", "right"), help="Accepted for compatibility; both lenses are displayed")
+    parser.add_argument("--debug-clicks", action="store_true", help="Print canvas and raw click coordinates")
     args = parser.parse_args()
 
     images = load_lens_images(args.stacked, args.left, args.right)
@@ -215,14 +202,15 @@ def main() -> None:
     def on_click(event, click_x, click_y, _flags, _userdata):
         if event != cv2.EVENT_LBUTTONDOWN:
             return
-        canvas_pixel = display_to_canvas(click_x, click_y, viewer_frame.shape)
-        if canvas_pixel is None:
-            return
-        canvas_x, canvas_y = canvas_pixel
+        # HighGUI mouse callbacks report coordinates in the imshow image's
+        # coordinate space, even when WINDOW_NORMAL scales that image.
+        canvas_x, canvas_y = click_x, click_y
         for lens_name in ("left", "right"):
             raw_pixel = panel_to_raw(canvas_x, canvas_y, images[lens_name], lens_panel_rect(lens_name))
             if raw_pixel is None:
                 continue
+            if args.debug_clicks:
+                print(f"canvas click: ({canvas_x:.1f}, {canvas_y:.1f}) -> {lens_name.upper()} raw: ({raw_pixel[0]:.1f}, {raw_pixel[1]:.1f})")
             try:
                 world = pixel_to_field(raw_pixel, lenses[lens_name]["K"], lenses[lens_name]["distortion"], lenses[lens_name]["lens2camera"], camera2world)
             except RuntimeError as error:
@@ -242,7 +230,7 @@ def main() -> None:
 
     window_flags = cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO
     cv2.namedWindow(WINDOW_NAME, window_flags)
-    cv2.resizeWindow(WINDOW_NAME, 1500, 900)
+    cv2.resizeWindow(WINDOW_NAME, 1500, 800)
     cv2.setMouseCallback(WINDOW_NAME, on_click)
     refresh()
     print("Click either lens. Press C to clear, Z to undo, or Q/Escape to quit.")
