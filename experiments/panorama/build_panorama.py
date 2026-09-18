@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import json
+import sys
 from pathlib import Path
 
 import cv2
@@ -8,6 +8,10 @@ import numpy as np
 
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from analysis.veo_metadata import load_veo_metadata
 
 CALIBRATION_PATH = (
     ROOT
@@ -33,20 +37,6 @@ SOURCE_HEIGHT = 1024.0
 
 SCALE_X = SOURCE_WIDTH / CALIBRATION_WIDTH
 SCALE_Y = SOURCE_HEIGHT / CALIBRATION_HEIGHT
-
-
-def parse_matrix(value, rows, cols):
-    return np.array(
-        [float(x) for x in value.split(",")],
-        dtype=np.float64,
-    ).reshape(rows, cols)
-
-
-def parse_vector(value):
-    return np.array(
-        [float(x) for x in value.split(",")],
-        dtype=np.float64,
-    )
 
 
 def build_lens_map(
@@ -249,54 +239,8 @@ def main():
             f"Could not load {RIGHT_PATH}"
         )
 
-    with open(
-        CALIBRATION_PATH,
-        "r",
-        encoding="utf-8",
-    ) as f:
-        calibration = json.load(f)
-
-    alignment = calibration["alignment"]
-
-    K_left = parse_matrix(
-        alignment["intrinsic_left"],
-        3,
-        3,
-    )
-
-    K_right = parse_matrix(
-        alignment["intrinsic_right"],
-        3,
-        3,
-    )
-
-    distortion_left = parse_vector(
-        alignment["distortion_left"]
-    )
-
-    distortion_right = parse_vector(
-        alignment["distortion_right"]
-    )
-
-    lens_left2camera = parse_matrix(
-        alignment["lens_left2camera"],
-        4,
-        4,
-    )
-
-    lens_right2camera = parse_matrix(
-        alignment["lens_right2camera"],
-        4,
-        4,
-    )
-
-    camera2presentation = parse_matrix(
-        alignment["camera2presentation"],
-        4,
-        4,
-    )
-
-    va = alignment["va_presentation"]
+    calibration = load_veo_metadata(CALIBRATION_PATH)
+    va = calibration.va_presentation
 
     print("Presentation angular range:")
     print(
@@ -315,10 +259,10 @@ def main():
 
     left_map_x, left_map_y, left_quality = (
         build_lens_map(
-            lens_left2camera,
-            camera2presentation,
-            K_left,
-            distortion_left,
+            calibration.left.lens2camera,
+            calibration.camera2presentation,
+            calibration.left.intrinsic,
+            calibration.left.distortion,
             va,
             OUTPUT_WIDTH,
             OUTPUT_HEIGHT,
@@ -329,10 +273,10 @@ def main():
 
     right_map_x, right_map_y, right_quality = (
         build_lens_map(
-            lens_right2camera,
-            camera2presentation,
-            K_right,
-            distortion_right,
+            calibration.right.lens2camera,
+            calibration.camera2presentation,
+            calibration.right.intrinsic,
+            calibration.right.distortion,
             va,
             OUTPUT_WIDTH,
             OUTPUT_HEIGHT,
