@@ -104,6 +104,24 @@ virtual rectified camera view; `dist gain x100` scales only the radial Veo
 distortion terms; and the LEFT/RIGHT `pp dx/dy` controls make small
 per-lens principal-point adjustments around the `.veo` values.
 
+## Streamlit development lab
+
+Install the small local UI dependency, then start the Lens configuration page:
+
+```bash
+pip install streamlit
+streamlit run dev_app/app.py
+```
+
+The page accepts an uploaded stacked JPG/PNG or a repository-local stacked
+frame path, and either a bundled or uploaded `.veo` calibration file. Select
+LEFT or RIGHT to inspect its RAW and rectified images side by side at their
+native aspect ratio. Its controls use the same defaults and OpenCV
+rectification helpers as `tools/tune_veo_rectification.py`: shared
+RAW-to-calibration mapping scale/offset, radial distortion gain, selected
+lens principal-point shifts, and virtual HFOV. `Save configuration` and `Save
+rectified image` write development artifacts under ignored `output/dev_app/`.
+
 ## Retained panorama visualisation
 
 From the repository root, run:
