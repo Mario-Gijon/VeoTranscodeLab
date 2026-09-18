@@ -37,7 +37,10 @@ python tools/annotate_field_calibration.py \
 ```
 
 The viewer shows both lenses, a cursor crosshair, lens-local RAW coordinates,
-and a nearest-neighbour magnifier. Saved coordinates are integer `(u, v)` RAW
+and a nearest-neighbour magnifier, plus a persistent 2D Spanish-labelled pitch
+minimap. The minimap highlights the currently selected line or landmark and
+shows the stable orientation: far side at the top, near side at the bottom.
+Saved coordinates are integer `(u, v)` RAW
 pixels: the RIGHT lens always uses its local `0..lens_height-1` vertical range,
 never the stacked-frame Y coordinate. Existing `--out` files are resumed.
 
@@ -45,7 +48,9 @@ Modes: `1` straight-line samples, `2` named landmarks, `3` LEFT/RIGHT
 correspondences, and `4` centre-circle samples. Use `N`/`P` to cycle line or
 landmark labels, `U` to undo the most recent session edit, `C` to cancel a
 pending correspondence, `S` to save, and `Q`/Escape to quit. Correspondences
-require one point from each lens before a `pair_###` record is created.
+require one point from each lens before a `pair_###` record is created. The
+header shows both the stable English identifier and a human-friendly Spanish
+target name; JSON identifiers remain unchanged.
 
 ## Retained panorama visualisation
 

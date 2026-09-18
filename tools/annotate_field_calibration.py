@@ -38,12 +38,61 @@ LANDMARK_LABELS = (
     "center_circle_halfway_near", "center_circle_halfway_far",
 )
 MODES = ("lines", "landmarks", "correspondences", "center_circle")
+MODE_NAMES_ES = {
+    "lines": "líneas",
+    "landmarks": "puntos de campo",
+    "correspondences": "correspondencias",
+    "center_circle": "muestras del círculo central",
+}
+LINE_NAMES_ES = {
+    "touchline_near": "banda cercana",
+    "touchline_far": "banda lejana",
+    "halfway_line": "línea de medio campo",
+    "goal_line_left": "línea de fondo izquierda",
+    "goal_line_right": "línea de fondo derecha",
+    "penalty_area_left_front": "frontal del área izquierda",
+    "penalty_area_right_front": "frontal del área derecha",
+    "penalty_area_left_near_side": "lateral cercano del área izquierda",
+    "penalty_area_left_far_side": "lateral lejano del área izquierda",
+    "penalty_area_right_near_side": "lateral cercano del área derecha",
+    "penalty_area_right_far_side": "lateral lejano del área derecha",
+    "goal_area_left_front": "frontal del área pequeña izquierda",
+    "goal_area_right_front": "frontal del área pequeña derecha",
+    "goal_area_left_near_side": "lateral cercano del área pequeña izquierda",
+    "goal_area_left_far_side": "lateral lejano del área pequeña izquierda",
+    "goal_area_right_near_side": "lateral cercano del área pequeña derecha",
+    "goal_area_right_far_side": "lateral lejano del área pequeña derecha",
+}
+LANDMARK_NAMES_ES = {
+    "center": "punto central",
+    "corner_left_near": "córner inferior izquierdo",
+    "corner_left_far": "córner superior izquierdo",
+    "corner_right_near": "córner inferior derecho",
+    "corner_right_far": "córner superior derecho",
+    "halfway_near": "punto medio cercano",
+    "halfway_far": "punto medio lejano",
+    "penalty_spot_left": "punto de penalti izquierdo",
+    "penalty_spot_right": "punto de penalti derecho",
+    "penalty_area_left_near": "esquina cercana del área izquierda",
+    "penalty_area_left_far": "esquina lejana del área izquierda",
+    "penalty_area_right_near": "esquina cercana del área derecha",
+    "penalty_area_right_far": "esquina lejana del área derecha",
+    "goal_area_left_near": "esquina cercana del área pequeña izquierda",
+    "goal_area_left_far": "esquina lejana del área pequeña izquierda",
+    "goal_area_right_near": "esquina cercana del área pequeña derecha",
+    "goal_area_right_far": "esquina lejana del área pequeña derecha",
+    "center_circle_halfway_near": "círculo central, lado cercano",
+    "center_circle_halfway_far": "círculo central, lado lejano",
+}
 WINDOW_NAME = "Veo field calibration annotations"
 MARGIN = 18
 HEADER_HEIGHT = 62
 FOOTER_HEIGHT = 24
 PANEL_HEIGHT = 500
 PANEL_GAP = 18
+MINIMAP_GAP = 24
+MINIMAP_WIDTH = 760
+MINIMAP_HEIGHT = 240
 MAGNIFIER_SIZE = 25
 MAGNIFIER_SCALE = 9
 
@@ -192,6 +241,160 @@ def draw_magnifier(canvas: np.ndarray, image: np.ndarray, raw: tuple[int, int], 
     draw_crosshair(canvas, cross, (0, 255, 255), 18)
 
 
+def minimap_point(
+    field_x: float,
+    field_z: float,
+    rect: tuple[int, int, int, int],
+    field_length: float,
+    field_width: float,
+) -> tuple[int, int]:
+    x, y, width, height = rect
+    scale = min(width / (field_length + 8.0), height / (field_width + 8.0))
+    center_x, center_y = x + width / 2.0, y + height / 2.0
+    return (
+        int(round(center_x + field_x * scale)),
+        int(round(center_y - field_z * scale)),
+    )
+
+
+def minimap_line(
+    canvas: np.ndarray,
+    start: tuple[float, float],
+    end: tuple[float, float],
+    rect: tuple[int, int, int, int],
+    field_length: float,
+    field_width: float,
+    color: tuple[int, int, int],
+    thickness: int = 2,
+) -> None:
+    cv2.line(
+        canvas,
+        minimap_point(*start, rect, field_length, field_width),
+        minimap_point(*end, rect, field_length, field_width),
+        color,
+        thickness,
+        cv2.LINE_AA,
+    )
+
+
+def feature_geometry(
+    mode: str,
+    label: str | None,
+    field_length: float,
+    field_width: float,
+) -> tuple[str, list[tuple[tuple[float, float], tuple[float, float]]], list[tuple[float, float]]]:
+    """Return highlighted line segments and points in stable pitch coordinates."""
+    half_length, half_width = field_length / 2.0, field_width / 2.0
+    penalty_left = -half_length + 16.5
+    penalty_right = half_length - 16.5
+    goal_left = -half_length + 5.5
+    goal_right = half_length - 5.5
+    penalty_near, penalty_far = -20.16, 20.16
+    goal_near, goal_far = -9.16, 9.16
+
+    if mode == "center_circle":
+        return "center_circle", [], [(0.0, 0.0)]
+    if mode == "correspondences":
+        return "center_circle (referencia visual)", [], [(0.0, 0.0)]
+    if mode == "landmarks":
+        points = {
+            "center": (0.0, 0.0),
+            "corner_left_near": (-half_length, -half_width),
+            "corner_left_far": (-half_length, half_width),
+            "corner_right_near": (half_length, -half_width),
+            "corner_right_far": (half_length, half_width),
+            "halfway_near": (0.0, -half_width),
+            "halfway_far": (0.0, half_width),
+            "penalty_spot_left": (-half_length + 11.0, 0.0),
+            "penalty_spot_right": (half_length - 11.0, 0.0),
+            "penalty_area_left_near": (penalty_left, penalty_near),
+            "penalty_area_left_far": (penalty_left, penalty_far),
+            "penalty_area_right_near": (penalty_right, penalty_near),
+            "penalty_area_right_far": (penalty_right, penalty_far),
+            "goal_area_left_near": (goal_left, goal_near),
+            "goal_area_left_far": (goal_left, goal_far),
+            "goal_area_right_near": (goal_right, goal_near),
+            "goal_area_right_far": (goal_right, goal_far),
+            "center_circle_halfway_near": (0.0, -9.15),
+            "center_circle_halfway_far": (0.0, 9.15),
+        }
+        return label or "center", [], [points.get(label, (0.0, 0.0))]
+
+    segments = {
+        "touchline_near": ((-half_length, -half_width), (half_length, -half_width)),
+        "touchline_far": ((-half_length, half_width), (half_length, half_width)),
+        "goal_line_left": ((-half_length, -half_width), (-half_length, half_width)),
+        "goal_line_right": ((half_length, -half_width), (half_length, half_width)),
+        "halfway_line": ((0.0, -half_width), (0.0, half_width)),
+        "penalty_area_left_front": ((penalty_left, penalty_near), (penalty_left, penalty_far)),
+        "penalty_area_right_front": ((penalty_right, penalty_near), (penalty_right, penalty_far)),
+        "goal_area_left_front": ((goal_left, goal_near), (goal_left, goal_far)),
+        "goal_area_right_front": ((goal_right, goal_near), (goal_right, goal_far)),
+        "penalty_area_left_near_side": ((-half_length, penalty_near), (penalty_left, penalty_near)),
+        "penalty_area_left_far_side": ((-half_length, penalty_far), (penalty_left, penalty_far)),
+        "penalty_area_right_near_side": ((penalty_right, penalty_near), (half_length, penalty_near)),
+        "penalty_area_right_far_side": ((penalty_right, penalty_far), (half_length, penalty_far)),
+        "goal_area_left_near_side": ((-half_length, goal_near), (goal_left, goal_near)),
+        "goal_area_left_far_side": ((-half_length, goal_far), (goal_left, goal_far)),
+        "goal_area_right_near_side": ((goal_right, goal_near), (half_length, goal_near)),
+        "goal_area_right_far_side": ((goal_right, goal_far), (half_length, goal_far)),
+    }
+    return label or "field", [segments.get(label, ((-half_length, 0.0), (half_length, 0.0)))], []
+
+
+def draw_minimap(
+    canvas: np.ndarray,
+    rect: tuple[int, int, int, int],
+    field_length: float,
+    field_width: float,
+    mode: str,
+    label: str | None,
+    display_name: str,
+) -> None:
+    """Draw the persistent field guide and highlight the active target."""
+    x, y, width, height = rect
+    green = (35, 105, 35)
+    white = (225, 225, 225)
+    active = (0, 220, 255)
+    cv2.rectangle(canvas, (x, y), (x + width, y + height), green, -1)
+    cv2.rectangle(canvas, (x, y), (x + width, y + height), white, 2)
+    half_length, half_width = field_length / 2.0, field_width / 2.0
+    minimap_line(canvas, (0.0, -half_width), (0.0, half_width), rect, field_length, field_width, white)
+    center = minimap_point(0.0, 0.0, rect, field_length, field_width)
+    scale = min(width / (field_length + 8.0), height / (field_width + 8.0))
+    cv2.circle(canvas, center, max(2, int(round(9.15 * scale))), white, 2, cv2.LINE_AA)
+    cv2.circle(canvas, center, 3, white, -1, cv2.LINE_AA)
+
+    for left, right in (
+        ((-half_length, -20.16), (-half_length + 16.5, -20.16)),
+        ((-half_length, 20.16), (-half_length + 16.5, 20.16)),
+        ((half_length - 16.5, -20.16), (half_length, -20.16)),
+        ((half_length - 16.5, 20.16), (half_length, 20.16)),
+        ((-half_length, -9.16), (-half_length + 5.5, -9.16)),
+        ((-half_length, 9.16), (-half_length + 5.5, 9.16)),
+        ((half_length - 5.5, -9.16), (half_length, -9.16)),
+        ((half_length - 5.5, 9.16), (half_length, 9.16)),
+    ):
+        minimap_line(canvas, left, right, rect, field_length, field_width, white)
+    for left, right in (
+        ((-half_length + 16.5, -20.16), (-half_length + 16.5, 20.16)),
+        ((half_length - 16.5, -20.16), (half_length - 16.5, 20.16)),
+        ((-half_length + 5.5, -9.16), (-half_length + 5.5, 9.16)),
+        ((half_length - 5.5, -9.16), (half_length - 5.5, 9.16)),
+    ):
+        minimap_line(canvas, left, right, rect, field_length, field_width, white)
+
+    segments, points = feature_geometry(mode, label, field_length, field_width)[1:]
+    for start, end in segments:
+        minimap_line(canvas, start, end, rect, field_length, field_width, active, 5)
+    for point in points:
+        pixel = minimap_point(*point, rect, field_length, field_width)
+        cv2.circle(canvas, pixel, 9, active, 3, cv2.LINE_AA)
+        cv2.drawMarker(canvas, pixel, active, cv2.MARKER_CROSS, 20, 2)
+    cv2.putText(canvas, "MINIMAPA | izquierda = fondo izq. | arriba = lado lejano", (x + 10, y - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.42, white, 1, cv2.LINE_AA)
+    cv2.putText(canvas, f"Activo: {display_name}", (x + 10, y + height - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.47, active, 1, cv2.LINE_AA)
+
+
 def draw_annotations(canvas: np.ndarray, images: dict[str, np.ndarray], panels: dict[str, tuple[int, int, int, int]], document: dict) -> None:
     annotations = document["annotations"]
     anchors = document.get("veo_anchors", {})
@@ -249,6 +452,18 @@ class AnnotationApp:
             return LANDMARK_LABELS[self.landmark_index]
         return None
 
+    @property
+    def target_display_name(self) -> str:
+        if self.mode == "lines":
+            label = self.label
+            return f"{label} | {LINE_NAMES_ES.get(label, label)}"
+        if self.mode == "landmarks":
+            label = self.label
+            return f"{label} | {LANDMARK_NAMES_ES.get(label, label)}"
+        if self.mode == "center_circle":
+            return "center_circle | círculo central"
+        return "correspondences | punto físico compartido"
+
     def add_point(self, lens: str, point: tuple[int, int]) -> None:
         annotations = self.document["annotations"]
         if self.mode == "lines":
@@ -302,7 +517,8 @@ class AnnotationApp:
     def render(self) -> np.ndarray:
         panel_width = self.panels["left"][2]
         canvas_width = 2 * MARGIN + 2 * panel_width + PANEL_GAP
-        canvas_height = HEADER_HEIGHT + PANEL_HEIGHT + FOOTER_HEIGHT + MARGIN
+        minimap_y = HEADER_HEIGHT + PANEL_HEIGHT + MINIMAP_GAP
+        canvas_height = minimap_y + MINIMAP_HEIGHT + FOOTER_HEIGHT + MARGIN
         canvas = np.full((canvas_height, canvas_width, 3), 22, dtype=np.uint8)
         for lens in ("left", "right"):
             x, y, width, height = self.panels[lens]
@@ -310,6 +526,16 @@ class AnnotationApp:
             cv2.rectangle(canvas, (x, y), (x + width, y + height), (235, 235, 235), 2)
             cv2.putText(canvas, lens.upper(), (x, y - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (235, 235, 235), 2, cv2.LINE_AA)
         draw_annotations(canvas, self.images, self.panels, self.document)
+        minimap_x = (canvas_width - MINIMAP_WIDTH) // 2
+        draw_minimap(
+            canvas,
+            (minimap_x, minimap_y, MINIMAP_WIDTH, MINIMAP_HEIGHT),
+            self.metadata.field_length,
+            self.metadata.field_width,
+            self.mode,
+            self.label,
+            self.target_display_name,
+        )
         if self.pending_pair is not None:
             lens = self.pending_pair["lens"]
             point = raw_to_panel(tuple(self.pending_pair["pixel"]), self.images[lens], self.panels[lens])
@@ -319,9 +545,9 @@ class AnnotationApp:
             draw_crosshair(canvas, canvas_point, (255, 220, 0))
             draw_magnifier(canvas, self.images[lens], raw, self.panels[lens])
         version = self.metadata.raw_json.get("calibration_version", "unknown")
-        label_text = self.label if self.label is not None else "no semantic label"
-        cv2.putText(canvas, f"MODE: {self.mode} | LABEL: {label_text}", (MARGIN, 19), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 255, 255), 1, cv2.LINE_AA)
-        cv2.putText(canvas, f"Field {self.metadata.field_length:.2f}m x {self.metadata.field_width:.2f}m | Veo calibration: {version}", (MARGIN, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (235, 235, 235), 1, cv2.LINE_AA)
+        cv2.putText(canvas, f"MODO: {self.mode} | {MODE_NAMES_ES[self.mode]}", (MARGIN, 19), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(canvas, f"OBJETIVO: {self.target_display_name}", (MARGIN, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (235, 235, 235), 1, cv2.LINE_AA)
+        cv2.putText(canvas, f"Field {self.metadata.field_length:.2f}m x {self.metadata.field_width:.2f}m | Veo calibration: {version}", (MARGIN, 57), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (180, 180, 180), 1, cv2.LINE_AA)
         if self.pending_pair is not None:
             pending = self.pending_pair
             pending_text = f"PENDING {pending['lens'].upper()} ({pending['pixel'][0]}, {pending['pixel'][1]}) | click the other lens, C cancel"
