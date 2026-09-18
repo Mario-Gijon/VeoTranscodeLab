@@ -73,6 +73,37 @@ The output directory contains the best rectified lens images, transformed
 annotation overlays, valid masks, a tested-family comparison panel,
 `report.json`, and `ranking.csv`.
 
+## Interactive Veo rectification tuning
+
+`tools/tune_veo_rectification.py` is a local OpenCV HighGUI utility for
+visually tuning how a stacked RAW frame is mapped into the coordinate space
+described by the `.veo` intrinsics and distortion. The mapping scale and
+offset are shared by LEFT and RIGHT; small per-lens principal-point deltas,
+rectified horizontal FOV, and a radial distortion gain are exposed as
+trackbars. This is a practical exploration tool, not a calibration solver.
+
+```bash
+python tools/tune_veo_rectification.py \
+  --stacked samples/match2_stacked_frame.jpg \
+  --calibration data/camera_alignment-d07ae0aa-86a6-4c57-9fa9-c6c34977b616.veo \
+  --annotations annotations/match2_calibration.json \
+  --view both \
+  --out output/tune_veo_rectification_match2
+```
+
+Controls: `S` saves the current settings, rectified images, and annotation
+summary; `W` writes only the current rectified images; `R` resets all
+trackbars; `Q` or `Escape` quits. The optional annotation file is read-only:
+its line points are drawn on the previews and used only as a straightness
+score, never to fit or force a warp. Invalid or missing annotations produce a
+readable warning and the rectification preview remains usable.
+
+The trackbars mean: `scale x/y` map RAW pixels into the `.veo` calibration
+canvas; `offset x/y` shift that shared mapping; `HFOV deg` controls the
+virtual rectified camera view; `dist gain x100` scales only the radial Veo
+distortion terms; and the LEFT/RIGHT `pp dx/dy` controls make small
+per-lens principal-point adjustments around the `.veo` values.
+
 ## Retained panorama visualisation
 
 From the repository root, run:
