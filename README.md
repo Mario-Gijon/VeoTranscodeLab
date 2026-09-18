@@ -52,6 +52,27 @@ require one point from each lens before a `pair_###` record is created. The
 header shows both the stable English identifier and a human-friendly Spanish
 target name; JSON identifiers remain unchanged.
 
+## Veo RAW rectification mapping search
+
+`analysis/refine_veo_rectification.py` searches the RAW-to-Veo
+calibration-coordinate mapping while keeping the `.veo` intrinsics and
+distortion coefficients fixed. It tests uniform scale/offset, anisotropic
+scale/offset, and larger-source-canvas crop hypotheses. Manual straight-line
+annotations are only an evaluation ruler: they score rectified line
+straightness and never define an image warp or homography.
+
+```bash
+python analysis/refine_veo_rectification.py \
+  --stacked samples/match2_stacked_frame.jpg \
+  --calibration data/camera_alignment-d07ae0aa-86a6-4c57-9fa9-c6c34977b616.veo \
+  --annotations annotations/match2_calibration.json \
+  --out-dir output/refine_veo_rectification_match2
+```
+
+The output directory contains the best rectified lens images, transformed
+annotation overlays, valid masks, a tested-family comparison panel,
+`report.json`, and `ranking.csv`.
+
 ## Retained panorama visualisation
 
 From the repository root, run:
