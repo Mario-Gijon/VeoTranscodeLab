@@ -59,8 +59,16 @@ class VeoMetadata:
             return self.right
         raise ValueError(f"Unknown lens: {lens_name!r}")
 
-    def selected_corners(self) -> list[SelectedCorner]:
+    def selected_corners(
+        self,
+        *,
+        stacked_width: int = 2048,
+        stacked_height: int = 2048,
+    ) -> list[SelectedCorner]:
         """Return valid Veo corner anchors in local RAW lens coordinates."""
+        if stacked_height % 2:
+            raise ValueError("Stacked frame height must be divisible by two")
+        lens_height = stacked_height // 2
         corners = self.raw_json.get("selected_corners", {}).get("corners_stacked", {})
         observations: list[SelectedCorner] = []
         for name, corner in corners.items():
@@ -69,9 +77,9 @@ class VeoMetadata:
                 if not entry or not entry.get("valid"):
                     continue
                 normalized_x, normalized_y = entry["stacked"]
-                raw_x = float(normalized_x) * 2048.0
-                stacked_y = float(normalized_y) * 2048.0
-                raw_y = stacked_y if lens_name == "left" else stacked_y - 1024.0
+                raw_x = float(normalized_x) * stacked_width
+                stacked_y = float(normalized_y) * stacked_height
+                raw_y = stacked_y if lens_name == "left" else stacked_y - lens_height
                 observations.append(
                     SelectedCorner(
                         name=name,

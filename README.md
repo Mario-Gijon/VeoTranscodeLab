@@ -23,6 +23,30 @@ metadata, and presentation data for the panorama visualisation.
 
 Generated files belong in `output/`, which is ignored by Git.
 
+## Manual calibration annotations
+
+Use the OpenCV annotation tool to collect precise, lens-local RAW pixels from
+one stacked frame. It only records observations; it performs no projection,
+distortion correction, or calibration.
+
+```bash
+python tools/annotate_field_calibration.py \
+  --stacked samples/match2_stacked_frame.jpg \
+  --calibration data/camera_alignment-d07ae0aa-86a6-4c57-9fa9-c6c34977b616.veo \
+  --out annotations/match2.json
+```
+
+The viewer shows both lenses, a cursor crosshair, lens-local RAW coordinates,
+and a nearest-neighbour magnifier. Saved coordinates are integer `(u, v)` RAW
+pixels: the RIGHT lens always uses its local `0..lens_height-1` vertical range,
+never the stacked-frame Y coordinate. Existing `--out` files are resumed.
+
+Modes: `1` straight-line samples, `2` named landmarks, `3` LEFT/RIGHT
+correspondences, and `4` centre-circle samples. Use `N`/`P` to cycle line or
+landmark labels, `U` to undo the most recent session edit, `C` to cancel a
+pending correspondence, `S` to save, and `Q`/Escape to quit. Correspondences
+require one point from each lens before a `pair_###` record is created.
+
 ## Retained panorama visualisation
 
 From the repository root, run:
