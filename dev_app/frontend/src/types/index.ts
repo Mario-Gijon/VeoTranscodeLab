@@ -86,7 +86,9 @@ export interface GroundPoint {
   point_index?: number
 }
 
-export interface VeoCandidate { calibration_version?: string | null; identifier: string; safe_url: string; filename: string; content_type: string | null; role: string; confidence: number; reasons: string[]; width: number | null; height: number | null; fps: number | null; duration_s: number | null; field_length: number | null; field_width: number | null }
-export interface VeoInspection { id: string; match_url: string; metadata: Record<string, string | null>; candidates: VeoCandidate[]; diagnostic_path: string | null }
+export interface VeoCandidate { calibration_version?: string | null; identifier: string; safe_url: string; filename: string; content_type: string | null; role: string; confidence: number; reasons: string[]; discovery_phases: string[]; width: number | null; height: number | null; fps: number | null; duration_s: number | null; field_length: number | null; field_width: number | null }
+export interface VeoResourceReference { identifier: string; filename: string; safe_url: string; discovery_phases: string[] }
+export interface VeoInspectionInteraction { default_phase_resources: VeoResourceReference[]; interactive_control_found: boolean; interactive_click_succeeded: boolean; interactive_attempts: string[]; menu_controls_inspected: string[]; post_interactive_resources: VeoResourceReference[]; final_classified_assets: { tracking: VeoResourceReference[]; dual_lens: VeoResourceReference[]; calibration: VeoResourceReference[] } }
+export interface VeoInspection { id: string; match_url: string; metadata: Record<string, string | null>; candidates: VeoCandidate[]; interaction: VeoInspectionInteraction; diagnostic_path: string | null }
 export interface VeoSession { error?: string | null; playwright_available: boolean; profile_exists: boolean; connect_browser_running: boolean }
 export interface VeoJob { progress?: number; completed_assets?: number; identifier: string; status: string; current_asset: string | null; bytes_downloaded: number; bytes_total: number | null; error: string | null; match_id: string | null }

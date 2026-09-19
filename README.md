@@ -122,9 +122,15 @@ or Brave. Install the optional browser support once:
 
 Choose **Connect Veo**, log in yourself in the headed browser, then close that
 browser and paste an authorized Veo match URL into **Import from Veo**. The
-inspection observes player network resources rather than relying on static HTML
-scraping. Review discovered files, evidence/confidence and available metadata;
-explicitly assign ambiguous videos or leave them skipped. Streaming manifests
+inspection begins network capture before page/player initialization, records the
+default player view, then deliberately opens **Interactive** (also supporting
+**Interactivo**) before it continues capture. Review shows each resource's
+discovery phase alongside evidence/confidence and available metadata: the
+initial `video.mp4` is a strong Tracking candidate, while post-Interactive
+`transcode-*.mp4` and `camera_alignment-*.veo` are strong dual-lens and
+calibration candidates. The inspector tries accessible controls first, then
+relevant visible player menus, and reports whether the action succeeded.
+Explicitly assign ambiguous videos or leave them skipped. Streaming manifests
 are shown as evidence, not downloaded as fake MP4 files. Metadata inspection can
 fetch bounded file prefixes, but full assets download only after **Import match**.
 

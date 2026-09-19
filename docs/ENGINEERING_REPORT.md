@@ -164,9 +164,17 @@ query values and fragments. Do not commit runtime data or share browser profiles
 
 ## 7. Asset discovery/classification
 
-The inspector observes successful browser network responses and nested resource
-URLs actually returned in bounded JSON, not guessed IDs/private endpoints.
-It combines filename/path, MIME, and optional 2048×2048 probe evidence.
+The inspector attaches its response listener before navigation/player
+initialization. It first records the default player phase, deliberately opens
+the visible **Interactive**/**Interactivo** mode using accessible controls (then
+relevant player-menu fallbacks), and records the post-Interactive phase. It
+combines that phase evidence with filename/path, MIME, and optional 2048×2048
+probe evidence: initial `video.mp4` strongly indicates Tracking; a
+post-Interactive `transcode-*.mp4` strongly indicates the dual-lens source;
+post-Interactive `camera_alignment-*.veo` strongly indicates calibration.
+Diagnostics explicitly list phase resources, control discovery/click status and
+final Tracking/Dual-lens/Calibration classifications. No IDs/private endpoints
+are guessed.
 Known sample IDs are not embedded in importer logic.
 
 Inspection limits: roughly nine seconds of page observation, 100 resources,
@@ -256,8 +264,8 @@ PNG, at 640×360 with Chromium/SwiftShader:
 
 | Calibration | Mean absolute RGB difference (0–255) | 99th percentile |
 | --- | ---: | ---: |
-| `67a3f0b3…` / match 1 | 0.112483 | 1.0 |
-| `d07ae0aa…` / match 2 | 0.071924 | 1.0 |
+| `67a3f0b3…` / match 1 | 0.128469 | 1.0 |
+| `d07ae0aa…` / match 2 | 0.092054 | 2.0 |
 
 This validates the shader integration on both samples, not performance on every
 GPU or every frame of a match. Native 1920 preview playback/seek was exercised;
@@ -316,7 +324,7 @@ state is working playback with disabled metric clicks, not a fabricated map.
   responsive coordinate/crop tests, production build.
 - `git diff --check`; no diff in the four protected modules or original assets.
 
-Final run: compilation passed; **39 pytest tests passed**; FastAPI startup and
+Final run: compilation passed; **42 pytest tests passed**; FastAPI startup and
 OpenAPI passed; Chromium parity/workflow passed; TypeScript, lint, coordinate
 assertions and production build passed; tracked and new-file whitespace checks
 passed. SHA-256 verification and Git diff confirm all four protected modules
@@ -405,8 +413,8 @@ The original CLI renderer commands for both matches remain in README.
 
 ## 21. Known limitations
 
-- Real authenticated Veo discovery/download is not live-verified. Bounded passive
-  observation can miss lazy resources or JSON without Content-Length; unfamiliar
+- Real authenticated Veo discovery/download is not live-verified. Bounded browser
+  observation can still miss lazy resources or JSON without Content-Length; unfamiliar
   API/header-based authorization may require a future observed integration.
 - Manifests are not assembled into downloads; only discovered complete files
   are supported. Unknown metadata is not invented.

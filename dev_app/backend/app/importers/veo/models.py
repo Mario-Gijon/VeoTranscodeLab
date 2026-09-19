@@ -16,6 +16,7 @@ class VeoCandidate:
     role: str
     confidence: float
     reasons: list[str]
+    discovery_phases: list[str] = field(default_factory=list)
     width: int | None = None
     height: int | None = None
     fps: float | None = None
@@ -39,6 +40,7 @@ class VeoInspection:
     safe_match_url: str
     metadata: dict[str, Any] = field(default_factory=dict)
     candidates: list[VeoCandidate] = field(default_factory=list)
+    interaction: dict[str, Any] = field(default_factory=dict)
     diagnostic_path: str | None = None
 
     def public_dict(self) -> dict[str, Any]:
@@ -47,5 +49,6 @@ class VeoInspection:
             "match_url": self.safe_match_url,
             "metadata": self.metadata,
             "candidates": [candidate.public_dict() for candidate in self.candidates],
+            "interaction": self.interaction,
             "diagnostic_path": self.diagnostic_path,
         }

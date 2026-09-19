@@ -5,6 +5,7 @@ import shutil
 
 from dev_app.backend.app import main
 from dev_app.backend.app.importers.veo.classifier import classify_resource, ranked_candidates, sanitize_url
+from dev_app.backend.app.importers.veo.inspector import AFTER_INTERACTIVE_PHASE, INITIAL_PHASE, activate_interactive, phase_diagnostics
 from dev_app.backend.app.importers.veo.models import VeoCandidate, VeoInspection
 from dev_app.backend.app.importers.veo.service import ImportJob, VeoImportService
 from dev_app.backend.app.schemas import VeoInspectRequest
@@ -24,6 +25,95 @@ def test_url_sanitization_and_conservative_resource_classification():
     assert ball.role == "ball_tracking"
     assert calibration.role == "calibration"
     assert ranked_candidates([ball, panorama], "panorama") == [panorama]
+
+
+def test_default_and_interactive_discovery_phases_drive_classification_and_diagnostics():
+    tracking = classify_resource("tracking", "https://cdn.example/video.mp4?token=private", "video/mp4", discovery_phases=[INITIAL_PHASE])
+    dual_lens = classify_resource("dual", "https://cdn.example/transcode-123.mp4?token=private", "video/mp4", {"width": 2048, "height": 2048}, [AFTER_INTERACTIVE_PHASE])
+    calibration = classify_resource("calibration", "https://cdn.example/camera_alignment-123.veo?token=private", "application/json", discovery_phases=[AFTER_INTERACTIVE_PHASE])
+    assert tracking.role == "ball_tracking" and tracking.confidence >= .9
+    assert "initial/default" in " ".join(tracking.reasons)
+    assert dual_lens.role == "panorama" and dual_lens.confidence >= .9
+    assert "after Interactive" in " ".join(dual_lens.reasons)
+    assert calibration.role == "calibration"
+    diagnostics = phase_diagnostics([tracking, dual_lens, calibration], {
+        "interactive_control_found": True,
+        "interactive_click_succeeded": True,
+        "interactive_attempts": ["interactive button"],
+        "menu_controls_inspected": [],
+    })
+    assert [item["identifier"] for item in diagnostics["default_phase_resources"]] == ["tracking"]
+    assert [item["identifier"] for item in diagnostics["post_interactive_resources"]] == ["dual", "calibration"]
+    assert [item["identifier"] for item in diagnostics["final_classified_assets"]["tracking"]] == ["tracking"]
+    assert [item["identifier"] for item in diagnostics["final_classified_assets"]["dual_lens"]] == ["dual"]
+    assert [item["identifier"] for item in diagnostics["final_classified_assets"]["calibration"]] == ["calibration"]
+    assert "private" not in str(diagnostics)
+
+
+def test_interactive_activation_prefers_accessibility_queries_and_supports_spanish_label():
+    class Control:
+        def is_visible(self, **_kwargs):
+            return True
+        def click(self, **_kwargs):
+            clicks.append("clicked")
+
+    class EmptyLocator:
+        def count(self):
+            return 0
+        def nth(self, _index):
+            raise AssertionError("No element should be selected")
+
+    class OneLocator:
+        def count(self):
+            return 1
+        def nth(self, _index):
+            return Control()
+
+    class Page:
+        def get_by_role(self, role, **kwargs):
+            calls.append((role, kwargs["name"]))
+            return OneLocator() if role == "button" else EmptyLocator()
+        def get_by_text(self, *_args, **_kwargs):
+            return EmptyLocator()
+
+    calls, clicks, phases = [], [], []
+    result = activate_interactive(Page(), lambda: phases.append(AFTER_INTERACTIVE_PHASE) or INITIAL_PHASE, phases.append)
+    assert result["interactive_control_found"] is True
+    assert result["interactive_click_succeeded"] is True
+    assert clicks == ["clicked"] and phases == [AFTER_INTERACTIVE_PHASE]
+    assert calls[0][0] == "button" and calls[0][1].search("Interactivo")
+
+
+def test_interactive_diagnostic_distinguishes_found_control_from_failed_click():
+    class Control:
+        def is_visible(self, **_kwargs):
+            return True
+        def click(self, **_kwargs):
+            raise RuntimeError("disabled in fixture")
+
+    class Locator:
+        def count(self):
+            return 1
+        def nth(self, _index):
+            return Control()
+
+    class Page:
+        def get_by_role(self, *_args, **_kwargs):
+            return Locator()
+        def get_by_text(self, *_args, **_kwargs):
+            return Locator()
+        def locator(self, *_args, **_kwargs):
+            return Locator()
+
+    phase = [INITIAL_PHASE]
+    result = activate_interactive(
+        Page(),
+        lambda: phase.append(AFTER_INTERACTIVE_PHASE) or INITIAL_PHASE,
+        lambda prior: phase.__setitem__(0, prior),
+    )
+    assert result["interactive_control_found"] is True
+    assert result["interactive_click_succeeded"] is False
+    assert phase[0] == INITIAL_PHASE
 
 
 def test_public_inspection_manifest_never_exposes_full_signed_url(tmp_path):

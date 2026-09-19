@@ -25,12 +25,19 @@ def resource_filename(value: str) -> str:
     return path.name or "unnamed-resource"
 
 
-def classify_resource(identifier: str, url: str, content_type: str | None = None, probe: dict | None = None) -> VeoCandidate:
+def classify_resource(
+    identifier: str,
+    url: str,
+    content_type: str | None = None,
+    probe: dict | None = None,
+    discovery_phases: list[str] | None = None,
+) -> VeoCandidate:
     """Score roles from independent naming, MIME, and optional probe evidence."""
     probe = probe or {}
     name = resource_filename(url)
     lower = f"{urlsplit(url).path} {name}".lower()
     content = (content_type or "").lower()
+    phases = list(dict.fromkeys(discovery_phases or []))
     reasons: list[str] = []
     score = {"panorama": 0.0, "ball_tracking": 0.0, "calibration": 0.0, "manifest": 0.0}
     if name.lower().endswith(".veo") or "camera_alignment" in lower:
@@ -39,6 +46,12 @@ def classify_resource(identifier: str, url: str, content_type: str | None = None
         score["panorama"] += 0.55; reasons.append("panorama/transcode path signal")
     if any(term in lower for term in ("ball_tracking", "ball-tracking", "follow_camera", "follow-camera", "followcam")):
         score["ball_tracking"] += 0.75; reasons.append("ball-tracking/follow-camera path signal")
+    if "initial" in phases and name.lower() == "video.mp4":
+        score["ball_tracking"] += 0.9; reasons.append("video.mp4 discovered in the initial/default player view")
+    if "after_interactive" in phases and name.lower().startswith("transcode-") and name.lower().endswith(".mp4"):
+        score["panorama"] += 0.9; reasons.append("transcode resource discovered after Interactive activation")
+    if "after_interactive" in phases and (name.lower().endswith(".veo") or "camera_alignment" in lower):
+        score["calibration"] += 0.1; reasons.append("calibration resource discovered after Interactive activation")
     if name.lower().endswith((".m3u8", ".mpd")) or "application/dash" in content or "mpegurl" in content:
         score["manifest"] += 0.7; reasons.append("streaming-manifest signal")
     if name.lower().endswith(".mp4") or content.startswith("video/"):
@@ -54,6 +67,7 @@ def classify_resource(identifier: str, url: str, content_type: str | None = None
     return VeoCandidate(
         identifier=identifier, url=urlunsplit((*urlsplit(url)[:4], "")), safe_url=sanitize_url(url), filename=name, content_type=content_type,
         role=role, confidence=min(confidence, 1.0), reasons=reasons or ["No reliable role signal"],
+        discovery_phases=phases,
         width=width, height=height, fps=probe.get("fps"), duration_s=probe.get("duration_s"),
     )
 
