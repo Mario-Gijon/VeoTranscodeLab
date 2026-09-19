@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Veo Panorama Geometry Validation</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Veo Panorama Geometry Validation</h1>
+        <p>Render a stacked Veo frame, click the panorama, and inspect its authoritative X/Z ground intersection.</p>
+      </header>
+
+      <form class="controls" action="{{ url_for('create_render') }}" method="post" enctype="multipart/form-data">
+        <label>
+          Stacked 2048×2048 frame
+          <input name="frame" type="file" accept="image/jpeg,image/png" required>
+        </label>
+        <fieldset>
+          <legend>Calibration</legend>
+          <label><input type="radio" name="calibration_source" value="repository" checked> Repository file</label>
+          <select name="calibration_file">
+            {% for calibration in calibrations %}
+            <option value="{{ calibration.name }}">{{ calibration.name }}</option>
+            {% endfor %}
+          </select>
+          <label><input type="radio" name="calibration_source" value="upload"> Upload .veo</label>
+          <input name="calibration_upload" type="file" accept=".veo,application/json">
+        </fieldset>
+        <label>
+          Panorama resolution
+          <select name="resolution">
+            {% for name in resolutions %}
+            <option value="{{ name }}" {% if name == '1920x1080' %}selected{% endif %}>{{ name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="submit">Render panorama</button>
+      </form>
+
+      {% if error %}
+      <p class="error">{{ error }}</p>
+      {% endif %}
+
+      {% if context %}
+      <section class="details">
+        <span>Frame: <strong>{{ context.frame_name }}</strong></span>
+        <span>Calibration: <strong>{{ context.calibration_name }}</strong></span>
+        <span>Field: <strong>{{ context.field_length }} × {{ context.field_width }} m</strong></span>
+        <button id="clear-points" type="button">Clear points</button>
+      </section>
+
+      <section class="workspace">
+        <article>
+          <h2>Panorama</h2>
+          <div class="canvas-wrap panorama-wrap">
+            <img id="panorama" src="{{ url_for('panorama_image', render_id=context.render_id) }}" width="{{ context.width }}" height="{{ context.height }}" alt="Rendered Veo panorama">
+            <canvas id="panorama-markers" width="{{ context.width }}" height="{{ context.height }}"></canvas>
+          </div>
+          <p class="hint">Click a panorama pixel to calculate its ground-plane intersection.</p>
+        </article>
+        <article>
+          <h2>Pitch reference</h2>
+          <canvas id="pitch" width="900" height="600"></canvas>
+          <p class="hint">Field markings are visual reference only; they do not change geometry.</p>
+        </article>
+      </section>
+
+      <section class="readout">
+        <h2>Selected points</h2>
+        <p id="empty-state">No panorama points selected.</p>
+        <ol id="point-list"></ol>
+      </section>
+
+      <script>
+        window.VEO_VALIDATION = {{ context|tojson }};
+      </script>
+      <script src="{{ url_for('static', filename='app.js') }}"></script>
+      {% endif %}
+    </main>
+  </body>
+</html>

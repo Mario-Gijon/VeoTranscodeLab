@@ -40,6 +40,25 @@ renders. Results are written to the selected output directory.
 The two available matches have both been reproduced and validated with their
 corresponding `.veo` files.
 
+## Geometry validation tool
+
+The local validation app renders an uploaded 2048×2048 stacked frame, then
+maps panorama clicks to their Y=0 world-plane intersections and displays their
+X/Z positions on a canonical pitch. It is a validation tool only: it does not
+alter the calibration or fit any geometry.
+
+```bash
+pip install Flask
+python dev_app/app.py
+```
+
+Open `http://127.0.0.1:5000`, upload a stacked frame, select or upload its
+matching `.veo` file, and render at 1920×1080 or 3840×2160. The browser scales
+the click back to the renderer's actual panorama pixel; Python then applies
+the same panorama ray conventions as the validated renderer and reports the
+ground-plane X/Z point. Multiple clicks remain visible on both the panorama
+and pitch reference.
+
 ## Repository contents and next work
 
 - `analysis/` contains the validated renderer and metadata reader.
@@ -48,6 +67,8 @@ corresponding `.veo` files.
   also be present at the repository root and are ignored by Git.
 - `reference/` contains the captured Veo Panoramic shaders, uniforms, and
   reference panorama image.
+- `dev_app/` contains the local panorama-to-pitch geometry validation UI.
+- `tests/` contains focused checks for the panorama click-to-ground helper.
 - `output/` is intentionally preserved as historical visual evidence and is
   ignored by Git.
 
