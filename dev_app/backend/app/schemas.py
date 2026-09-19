@@ -15,6 +15,21 @@ class CreateMatchRequest(BaseModel):
 
 class PathImportRequest(BaseModel):
     path: str = Field(min_length=1)
+    role: Literal["tracking", "dual_lens", "clip", "image", "unknown"] = "unknown"
+
+
+class MediaRoleRequest(BaseModel):
+    role: Literal["tracking", "dual_lens", "clip", "image", "unknown"]
+
+
+class ViewPointRequest(BaseModel):
+    context_id: str
+    view: Literal["panorama", "dual_lens"]
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    width: Literal[1920, 3840, 2048] = 1920
+    height: Literal[1080, 2160, 2048] = 1080
+    landmark_id: str | None = None
 
 
 class ExtractFrameRequest(BaseModel):
@@ -34,6 +49,15 @@ class GroundPointRequest(BaseModel):
     x: int = Field(ge=0)
     y: int = Field(ge=0)
     landmark_id: str | None = None
+
+
+class VeoInspectRequest(BaseModel):
+    match_url: str = Field(min_length=8, max_length=4096)
+
+
+class VeoImportRequest(BaseModel):
+    inspection_id: str
+    selected_assets: dict[str, str] = Field(default_factory=dict)
 
 
 class ApiError(BaseModel):

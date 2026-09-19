@@ -1,4 +1,4 @@
-import type { Calibration, GroundPoint, MatchWorkspace, MediaItem, RenderedPanorama } from '../types'
+import type { Calibration, GroundPoint, MatchWorkspace, MediaItem, RenderedPanorama, VeoInspection, VeoJob, VeoSession, ViewContext } from '../types'
 
 const baseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000'
 const url = (path: string) => `${baseUrl}${path}`
@@ -14,6 +14,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  viewContext: (id: string) => request<ViewContext>(`/api/matches/${id}/view-context`),
+  setRole: (id: string, role: string) => request<MediaItem>(`/api/media/${id}/role`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role }) }),
+  viewPoint: (contextId: string, view: string, x: number, y: number, width: number, height: number, landmarkId: string | null) => request<GroundPoint>('/api/view-point', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ context_id: contextId, view, x, y, width, height, landmark_id: landmarkId }) }),
   url,
   health: () => request<{ status: string }>('/api/health'),
   calibrations: () => request<Calibration[]>('/api/calibrations'),
@@ -27,4 +30,11 @@ export const api = {
   extractFrame: (mediaId: string, timestamp: number) => request<MediaItem>('/api/media/frame', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ media_id: mediaId, timestamp_s: timestamp }) }),
   render: (matchId: string, mediaId: string, width: number, height: number) => request<RenderedPanorama>('/api/panorama/render', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ match_id: matchId, media_id: mediaId, width, height }) }),
   groundPoint: (renderId: string, x: number, y: number, landmarkId: string | null) => request<GroundPoint>('/api/ground-point', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ render_id: renderId, x, y, landmark_id: landmarkId }) }),
+  veoSession: () => request<VeoSession>('/api/veo/session'),
+  connectVeo: () => request<VeoSession>('/api/veo/connect', { method: 'POST' }),
+  disconnectVeo: () => request<VeoSession>('/api/veo/session', { method: 'DELETE' }),
+  inspectVeo: (matchUrl: string) => request<VeoInspection>('/api/veo/inspect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ match_url: matchUrl }) }),
+  importVeo: (inspectionId: string, selectedAssets: Record<string, string>) => request<VeoJob>('/api/veo/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ inspection_id: inspectionId, selected_assets: selectedAssets }) }),
+  veoJob: (jobId: string) => request<VeoJob>(`/api/veo/import/${jobId}`),
+  cancelVeoJob: (jobId: string) => request<VeoJob>(`/api/veo/import/${jobId}`, { method: 'DELETE' }),
 }

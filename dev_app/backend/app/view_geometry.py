@@ -1,0 +1,51 @@
+"""Shader transport and cached Python geometry contexts for native video views."""
+from __future__ import annotations
+
+import uuid
+from pathlib import Path
+
+import numpy as np
+
+from analysis.veo_metadata import load_veo_metadata
+from analysis.panorama_landmarks import field_landmarks
+
+ROOT = Path(__file__).resolve().parents[3]
+contexts: dict = {}
+keys: dict = {}
+
+
+def view_context(calibration_path: str) -> dict:
+    path = Path(calibration_path)
+    key = (str(path.resolve()), path.stat().st_mtime_ns)
+    if key in keys:
+        return keys[key]
+    metadata = load_veo_metadata(path)
+    uniforms = {}
+    for name, matrix in {
+        "camera2world": metadata.camera2world,
+        "camera2presentation": np.linalg.inv(metadata.camera2presentation),
+        "lens_left2camera": metadata.left.lens2camera,
+        "lens_right2camera": metadata.right.lens2camera,
+        "intrinsic_left": metadata.left.intrinsic,
+        "intrinsic_right": metadata.right.intrinsic,
+    }.items():
+        uniforms[name] = {"matrix": int(matrix.shape[0]), "value": matrix.flatten(order="F").tolist()}
+    for name, value in metadata.va_presentation.items():
+        uniforms[f"va_{name}"] = {"value": value}
+    for lens in (metadata.left, metadata.right):
+        distortion = np.zeros(8)
+        distortion[:min(len(lens.distortion), 8)] = lens.distortion[:8]
+        for name, value in zip(("k1", "k2", "p1", "p2", "k3", "k4", "k5", "k6"), distortion):
+            uniforms[f"distortion_{lens.name}.{name}"] = {"value": float(value)}
+    identifier = uuid.uuid4().hex
+    contexts[identifier] = metadata
+    result = {
+        "id": identifier, "uniforms": uniforms,
+        "vertex_shader": (ROOT / "reference/veo_panoramic.vert.glsl").read_text(),
+        "fragment_shader": (ROOT / "reference/veo_panoramic.frag.glsl").read_text(),
+        "field_length": metadata.field_length, "field_width": metadata.field_width,
+        "landmarks": [value.to_dict() for value in field_landmarks(metadata.field_length, metadata.field_width).values()],
+        "tracking_geometry": {"available": False, "reason": "No timestamped virtual-camera pose, FOV/zoom, or encoded-frame crop transform is available. A static calibration cannot map the moving tracking view."},
+    }
+    keys[key] = result
+    return result

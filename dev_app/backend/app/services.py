@@ -35,6 +35,7 @@ def calibration_summary(path: Path, source: str) -> dict[str, Any]:
         "source": source,
         "field_length": metadata.field_length,
         "field_width": metadata.field_width,
+        "version": metadata.raw_json.get("calibration_version", metadata.raw_json.get("version")),
     }
 
 
@@ -42,7 +43,10 @@ def validate_calibration_path(value: str | Path, source: str = "path") -> dict[s
     path = Path(value).expanduser().resolve()
     if not path.is_file() or path.suffix.lower() != ".veo":
         raise ValueError("Calibration must be a readable .veo file.")
-    return calibration_summary(path, source)
+    try:
+        return calibration_summary(path, source)
+    except (KeyError, TypeError, np.linalg.LinAlgError) as exc:
+        raise ValueError("Calibration is missing required Veo metadata") from exc
 
 
 def infer_media_kind(path: Path) -> str:
@@ -70,6 +74,8 @@ def inspect_media(path: Path, forced_kind: str | None = None) -> dict[str, Any]:
     width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
     height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
     capture.release()
+    if width <= 0 or height <= 0 or not np.isfinite([fps, frame_count]).all():
+        raise ValueError("The video has invalid dimensions or timing metadata.")
     return {
         "kind": "clip" if kind == "clip" else "video",
         "width": width,
@@ -89,6 +95,8 @@ def media_record(path: Path, *, name: str | None = None, kind: str | None = None
         "name": name or path.name,
         "path": str(path),
         "source": source,
+        "size_bytes": path.stat().st_size,
+        "role": "image" if (kind or infer_media_kind(path)) in {"image", "frame"} else "unknown",
         **inspect_media(path, kind),
     }
 
@@ -98,6 +106,15 @@ def save_upload(upload, destination: Path) -> Path:
     with destination.open("wb") as target:
         shutil.copyfileobj(upload.file, target)
     return destination
+
+
+def validate_media_role(media: dict, role: str) -> None:
+    if role in {"tracking", "dual_lens", "clip"} and media["kind"] not in {"video", "clip"}:
+        raise ValueError("Choose a video for this role.")
+    if role == "dual_lens" and (media["width"], media["height"]) != (2048, 2048):
+        raise ValueError("The validated dual-lens input must be 2048×2048.")
+    if role == "image" and media["kind"] not in {"frame", "image"}:
+        raise ValueError("Choose an image for this role.")
 
 
 def extract_frame(video_path: Path, timestamp_s: float, output_path: Path) -> dict[str, Any]:

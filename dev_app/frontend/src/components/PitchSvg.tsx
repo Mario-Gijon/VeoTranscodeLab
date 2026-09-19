@@ -34,6 +34,7 @@ export default function PitchSvg({ length, width, points }: Props) {
         {point.expected_x !== null && point.expected_z !== null && <Point x={point.expected_x} z={point.expected_z} size={3.5} color="#65c7ff" diamond />}
         {point.measured_x !== null && point.measured_z !== null && <Point x={point.measured_x} z={point.measured_z} size={3.5} color={point.status === 'inside_field' ? '#ffcf4a' : '#ff953f'} />}
       </g>)}</g>
+      {points.map((point, index) => point.measured_x !== null && point.measured_z !== null && <text key={index} x={point.measured_x + 2} y={-point.measured_z - 2} fontSize="3" fill="white" stroke="#123" strokeWidth="0.15" paintOrder="stroke">{point.point_index ?? index + 1}</text>)}
     </svg>
     <Typography variant="caption" color="text.secondary">Blue diamond: expected landmark · yellow/orange: measured click</Typography>
   </Box>

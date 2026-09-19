@@ -1,6 +1,14 @@
 export type MediaKind = 'image' | 'frame' | 'video' | 'clip'
 
+export interface ViewContext {
+  id: string; field_length: number; field_width: number; landmarks: Landmark[]
+  uniforms: Record<string, { matrix?: number; value: number | number[] }>
+  vertex_shader: string; fragment_shader: string
+  tracking_geometry: { available: boolean; reason: string }
+}
+
 export interface Calibration {
+  version?: string | number | null
   id: string
   name: string
   path: string
@@ -10,6 +18,8 @@ export interface Calibration {
 }
 
 export interface MediaItem {
+  role?: 'tracking' | 'dual_lens' | 'clip' | 'image' | 'unknown'
+  size_bytes?: number
   id: string
   name: string
   path: string
@@ -26,6 +36,7 @@ export interface MediaItem {
 }
 
 export interface MatchWorkspace {
+  metadata?: Record<string, string | null>
   id: string
   name: string
   description: string
@@ -39,6 +50,7 @@ export interface MatchWorkspace {
 export interface Landmark { id: string; name: string; x: number; z: number }
 
 export interface RenderedPanorama {
+  timestamp_s?: number
   id: string
   url: string
   width: number
@@ -49,6 +61,10 @@ export interface RenderedPanorama {
 }
 
 export interface GroundPoint {
+  view?: string
+  timestamp_s?: number
+  media_id?: string
+  view_width?: number
   pixel_x: number
   pixel_y: number
   u: number
@@ -69,3 +85,8 @@ export interface GroundPoint {
   field_error_m: number | null
   point_index?: number
 }
+
+export interface VeoCandidate { calibration_version?: string | null; identifier: string; safe_url: string; filename: string; content_type: string | null; role: string; confidence: number; reasons: string[]; width: number | null; height: number | null; fps: number | null; duration_s: number | null; field_length: number | null; field_width: number | null }
+export interface VeoInspection { id: string; match_url: string; metadata: Record<string, string | null>; candidates: VeoCandidate[]; diagnostic_path: string | null }
+export interface VeoSession { error?: string | null; playwright_available: boolean; profile_exists: boolean; connect_browser_running: boolean }
+export interface VeoJob { progress?: number; completed_assets?: number; identifier: string; status: string; current_asset: string | null; bytes_downloaded: number; bytes_total: number | null; error: string | null; match_id: string | null }

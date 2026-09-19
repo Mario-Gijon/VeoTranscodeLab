@@ -1,33 +1,39 @@
-"""FastAPI service for the local Veo panorama-to-pitch validation app.
+"""FastAPI service for the local Veo Match Lab.
 
-The backend intentionally owns rendering and every camera/ground calculation.
-The browser receives results and visualizes them; it never recreates geometry.
+Python owns metric geometry and supplies the captured shader's uniforms.
+The browser performs native video playback and WebGL visualization only.
 """
 
 from __future__ import annotations
 
 import sys
+import os
 import uuid
 from pathlib import Path
 from typing import Annotated, Any
 
 import cv2
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
-from .schemas import CreateMatchRequest, ExtractFrameRequest, GroundPointRequest, PathImportRequest, RenderRequest
+from .importers.veo.service import VeoImportService
+from .schemas import CreateMatchRequest, ExtractFrameRequest, GroundPointRequest, PathImportRequest, RenderRequest, VeoImportRequest, VeoInspectRequest
 from .services import (
     ROOT,
-    calibration_summary,
     extract_frame,
     load_stacked_frame,
     media_record,
     repository_calibrations,
     save_upload,
     validate_calibration_path,
+    validate_media_role,
 )
 from .storage import WorkspaceStore
+from .schemas import MediaRoleRequest, ViewPointRequest
+from .view_geometry import view_context, contexts
+from analysis.raw_ground import raw_pixel_to_ground
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -38,18 +44,26 @@ from analysis.reproduce_veo_panorama import render
 from analysis.veo_metadata import load_veo_metadata
 
 
-RUNTIME_ROOT = ROOT / "dev_app" / "runtime"
+RUNTIME_ROOT = Path(os.environ.get("VEO_RUNTIME_ROOT", str(ROOT / "dev_app" / "runtime"))).resolve()
 store = WorkspaceStore(RUNTIME_ROOT)
 render_cache: dict[str, dict[str, Any]] = {}
+veo_imports = VeoImportService(store, RUNTIME_ROOT)
 
-app = FastAPI(title="Veo Panorama Geometry Lab", version="1.0.0")
+app = FastAPI(title="Veo Match Lab", version="2.0.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=os.environ.get("VEO_FRONTEND_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request(_request, exc):
+    # Do not echo submitted signed URLs or other input values in validation errors.
+    fields = ", ".join(".".join(str(part) for part in error["loc"]) for error in exc.errors())
+    return JSONResponse(status_code=422, content={"detail": {"message": f"Invalid request fields: {fields}", "code": "invalid_request"}})
 
 
 def api_error(status: int, detail: str, code: str) -> HTTPException:
@@ -76,8 +90,8 @@ def with_calibration(match: dict[str, Any]):
         raise api_error(409, "Select a calibration before rendering.", "calibration_required")
     try:
         return load_veo_metadata(calibration["path"])
-    except (OSError, KeyError, ValueError) as exc:
-        raise api_error(422, f"Could not read the workspace calibration: {exc}", "invalid_calibration") from exc
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise api_error(422, "Could not read the workspace calibration; select a valid .veo file.", "invalid_calibration") from exc
 
 
 def match_summary(match: dict[str, Any]) -> dict[str, Any]:
@@ -96,6 +110,65 @@ def health() -> dict[str, str]:
 @app.get("/api/calibrations")
 def calibrations() -> list[dict[str, Any]]:
     return repository_calibrations()
+
+
+@app.get("/api/veo/session")
+def veo_session() -> dict[str, Any]:
+    return veo_imports.session()
+
+
+@app.post("/api/veo/connect")
+def connect_veo() -> dict[str, Any]:
+    try:
+        return veo_imports.connect()
+    except RuntimeError as exc:
+        raise api_error(422, str(exc), "playwright_unavailable") from exc
+    except Exception as exc:
+        raise api_error(422, "Could not open the dedicated browser; check Chromium installation and desktop access.", "veo_connect_failed") from exc
+
+
+@app.delete("/api/veo/session")
+def disconnect_veo() -> dict[str, Any]:
+    try:
+        return veo_imports.disconnect()
+    except ValueError as exc:
+        raise api_error(409, str(exc), "veo_busy") from exc
+    except Exception as exc:
+        raise api_error(409, "Close the Veo browser and retry disconnecting.", "veo_disconnect_failed") from exc
+
+
+@app.post("/api/veo/inspect")
+def inspect_veo(payload: VeoInspectRequest) -> dict[str, Any]:
+    try:
+        return veo_imports.inspect(payload.match_url).public_dict()
+    except ValueError as exc:
+        raise api_error(422, str(exc), "veo_inspection_failed") from exc
+    except Exception as exc:
+        raise api_error(422, "Inspection failed. Check Playwright/Chromium installation, close the Connect browser, and verify access to this match.", "veo_inspection_failed") from exc
+
+
+@app.post("/api/veo/import", status_code=202)
+def import_veo(payload: VeoImportRequest) -> dict[str, Any]:
+    try:
+        return veo_imports.start_import(payload.inspection_id, payload.selected_assets).public_dict()
+    except ValueError as exc:
+        raise api_error(422, str(exc), "veo_import_invalid") from exc
+
+
+@app.get("/api/veo/import/{job_id}")
+def veo_import_status(job_id: str) -> dict[str, Any]:
+    job = veo_imports.job(job_id)
+    if job is None:
+        raise api_error(404, "Import job not found.", "veo_import_not_found")
+    return job.public_dict()
+
+
+@app.delete("/api/veo/import/{job_id}")
+def cancel_veo_import(job_id: str) -> dict[str, Any]:
+    job = veo_imports.cancel(job_id)
+    if job is None:
+        raise api_error(404, "Import job not found.", "veo_import_not_found")
+    return job.public_dict()
 
 
 @app.get("/api/matches")
@@ -120,6 +193,54 @@ def get_match(match_id: str) -> dict[str, Any]:
     return {**match_summary(match), "media": [public_media(item) for item in match["media"]]}
 
 
+@app.get("/api/matches/{match_id}/view-context")
+def get_view_context(match_id: str) -> dict:
+    match = require_match(match_id)
+    with_calibration(match)
+    return view_context(match["calibration"]["path"])
+
+
+@app.patch("/api/media/{media_id}/role")
+def set_media_role(media_id: str, payload: MediaRoleRequest) -> dict:
+    match, media = require_media(media_id)
+    try:
+        validate_media_role(media, payload.role)
+    except ValueError as exc:
+        raise api_error(422, str(exc), "invalid_role") from exc
+    def update(item):
+        next(value for value in item["media"] if value["id"] == media_id)["role"] = payload.role
+    store.update_match(match["id"], update)
+    return public_media({**media, "role": payload.role})
+
+
+@app.post("/api/view-point")
+def view_point(payload: ViewPointRequest) -> dict:
+    metadata = contexts.get(payload.context_id)
+    if metadata is None:
+        raise api_error(409, "Reload the match geometry context.", "context_expired")
+    try:
+        if payload.view == "dual_lens":
+            if (payload.width, payload.height) != (2048, 2048):
+                raise ValueError("RAW view coordinates must use the stacked 2048×2048 source")
+            point = raw_pixel_to_ground(metadata, payload.x, payload.y)
+        else:
+            if (payload.width, payload.height) not in {(1920, 1080), (3840, 2160)}:
+                raise ValueError("Unsupported panorama resolution")
+            point = ground_intersection_for_pixel(metadata, payload.x, payload.y, payload.width, payload.height)
+        response = point.to_dict()
+        if payload.landmark_id:
+            landmark = field_landmarks(metadata.field_length, metadata.field_width).get(payload.landmark_id)
+            if landmark is None:
+                raise ValueError("Unknown landmark")
+            response.update(landmark_validation(landmark, point))
+        else:
+            response.update(landmark=None, landmark_name=None, expected_x=None, expected_z=None,
+                            measured_x=point.world_x, measured_z=point.world_z, delta_x=None, delta_z=None, field_error_m=None)
+        return response
+    except ValueError as exc:
+        raise api_error(422, str(exc), "invalid_view_point") from exc
+
+
 @app.post("/api/matches/{match_id}/calibration/path")
 def import_calibration_path(match_id: str, payload: PathImportRequest) -> dict[str, Any]:
     try:
@@ -137,11 +258,11 @@ def upload_calibration(match_id: str, file: Annotated[UploadFile, File(...)]) ->
     require_match(match_id)
     if not file.filename or Path(file.filename).suffix.lower() != ".veo":
         raise api_error(422, "Upload a .veo calibration file.", "invalid_calibration")
-    destination = RUNTIME_ROOT / "media" / match_id / f"calibration_{uuid.uuid4().hex[:8]}.veo"
+    destination = store.asset_dir(match_id, "calibration") / f"calibration_{uuid.uuid4().hex[:8]}.veo"
     save_upload(file, destination)
     try:
-        calibration = calibration_summary(destination, "upload")
-    except (OSError, ValueError, KeyError) as exc:
+        calibration = validate_calibration_path(destination, "upload")
+    except (OSError, ValueError) as exc:
         destination.unlink(missing_ok=True)
         raise api_error(422, f"Could not read the uploaded calibration: {exc}", "invalid_calibration") from exc
     match = store.update_match(match_id, lambda item: item.update(calibration=calibration))
@@ -161,8 +282,10 @@ def import_media_path(match_id: str, payload: PathImportRequest) -> dict[str, An
     require_match(match_id)
     try:
         record = media_record(Path(payload.path), source="path")
+        validate_media_role(record, payload.role)
     except (OSError, ValueError) as exc:
         raise api_error(422, str(exc), "invalid_media") from exc
+    record["role"] = payload.role if payload.role != "unknown" else record["role"]
     return add_media(match_id, record)
 
 
@@ -172,7 +295,7 @@ def upload_media(match_id: str, file: Annotated[UploadFile, File(...)]) -> dict[
     if not file.filename:
         raise api_error(422, "Choose a media file to upload.", "invalid_media")
     suffix = Path(file.filename).suffix.lower()
-    destination = RUNTIME_ROOT / "media" / match_id / f"{uuid.uuid4().hex[:8]}{suffix}"
+    destination = store.asset_dir(match_id, "media") / f"{uuid.uuid4().hex[:8]}{suffix}"
     save_upload(file, destination)
     try:
         record = media_record(destination, name=Path(file.filename).name, source="upload")
@@ -188,7 +311,7 @@ def media_content(media_id: str):
     path = Path(media["path"])
     if not path.is_file():
         raise api_error(404, "The referenced media file is no longer available.", "media_missing")
-    return FileResponse(path, filename=media["name"])
+    return FileResponse(path, filename=media["name"], content_disposition_type="inline")
 
 
 @app.post("/api/media/frame", status_code=201)
@@ -196,7 +319,7 @@ def frame_from_video(payload: ExtractFrameRequest) -> dict[str, Any]:
     match, media = require_media(payload.media_id)
     if media["kind"] not in {"video", "clip"}:
         raise api_error(422, "Frame extraction requires video or clip media.", "not_video")
-    destination = RUNTIME_ROOT / "frames" / match["id"] / f"frame_{uuid.uuid4().hex[:8]}.jpg"
+    destination = store.asset_dir(match["id"], "frames") / f"frame_{uuid.uuid4().hex[:8]}.jpg"
     try:
         details = extract_frame(Path(media["path"]), payload.timestamp_s, destination)
         record = media_record(destination, name=f"{media['name']} @ {details['actual_time_s']:.3f}s", kind="frame", source="extracted")
@@ -225,7 +348,7 @@ def render_panorama(payload: RenderRequest) -> dict[str, Any]:
     except (OSError, RuntimeError, ValueError) as exc:
         raise api_error(422, str(exc), "render_failed") from exc
     render_id = f"render_{uuid.uuid4().hex[:12]}"
-    image_path = RUNTIME_ROOT / "cache" / f"{render_id}.png"
+    image_path = store.asset_dir(match["id"], "cache") / f"{render_id}.png"
     image_path.write_bytes(encoded.tobytes())
     render_cache[render_id] = {
         "path": image_path,
