@@ -57,7 +57,12 @@ matching `.veo` file, and render at 1920×1080 or 3840×2160. The browser scales
 the click back to the renderer's actual panorama pixel; Python then applies
 the same panorama ray conventions as the validated renderer and reports the
 ground-plane X/Z point. Multiple clicks remain visible on both the panorama
-and pitch reference.
+and pitch reference. Use **Selected landmark** mode to compare a panorama
+click with a field-dimension-derived center mark, penalty spot, corner,
+penalty-area corner, or goal-area corner; the reported field error is only a
+validation measurement. A cursor magnifier follows the panorama pointer for
+precise selection; use the mouse wheel over the panorama to adjust it from
+2× to 10×.
 
 ## Repository contents and next work
 

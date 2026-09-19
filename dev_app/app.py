@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from analysis.panorama_ground import ground_intersection_for_pixel
+from analysis.panorama_landmarks import field_landmarks, landmark_validation
 from analysis.reproduce_veo_panorama import render
 from analysis.veo_metadata import load_veo_metadata
 
@@ -95,6 +96,13 @@ def index():
             "field_width": cached["metadata"].field_width,
             "calibration_name": cached["calibration_name"],
             "frame_name": cached["frame_name"],
+            "landmarks": [
+                landmark.to_dict()
+                for landmark in field_landmarks(
+                    cached["metadata"].field_length,
+                    cached["metadata"].field_width,
+                ).values()
+            ],
         }
     return render_template(
         "index.html",
@@ -170,9 +178,29 @@ def click_to_ground():
         point = ground_intersection_for_pixel(
             cached["metadata"], pixel_x, pixel_y, cached["width"], cached["height"]
         )
+        response = point.to_dict()
+        landmark_id = payload.get("landmark")
+        if landmark_id is not None:
+            landmarks = field_landmarks(cached["metadata"].field_length, cached["metadata"].field_width)
+            landmark = landmarks.get(landmark_id)
+            if landmark is None:
+                raise ValueError("Unknown field landmark.")
+            response.update(landmark_validation(landmark, point))
+        else:
+            response.update(
+                landmark=None,
+                landmark_name=None,
+                expected_x=None,
+                expected_z=None,
+                measured_x=point.world_x,
+                measured_z=point.world_z,
+                delta_x=None,
+                delta_z=None,
+                field_error_m=None,
+            )
     except (KeyError, TypeError, ValueError) as exc:
         return jsonify(error=str(exc)), 400
-    return jsonify(point.to_dict())
+    return jsonify(response)
 
 
 if __name__ == "__main__":

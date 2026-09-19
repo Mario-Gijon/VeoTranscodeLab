@@ -49,6 +49,21 @@
         <span>Frame: <strong>{{ context.frame_name }}</strong></span>
         <span>Calibration: <strong>{{ context.calibration_name }}</strong></span>
         <span>Field: <strong>{{ context.field_length }} × {{ context.field_width }} m</strong></span>
+        <label class="click-mode">
+          Click mode
+          <select id="click-mode">
+            <option value="free">Free point</option>
+            <option value="landmark">Selected landmark</option>
+          </select>
+        </label>
+        <label class="landmark-picker" id="landmark-picker" hidden>
+          Landmark
+          <select id="landmark-select">
+            {% for landmark in context.landmarks %}
+            <option value="{{ landmark.id }}">{{ landmark.name }} (X={{ '%.2f'|format(landmark.x) }}, Z={{ '%.2f'|format(landmark.z) }})</option>
+            {% endfor %}
+          </select>
+        </label>
         <button id="clear-points" type="button">Clear points</button>
       </section>
 
@@ -58,20 +73,28 @@
           <div class="canvas-wrap panorama-wrap">
             <img id="panorama" src="{{ url_for('panorama_image', render_id=context.render_id) }}" width="{{ context.width }}" height="{{ context.height }}" alt="Rendered Veo panorama">
             <canvas id="panorama-markers" width="{{ context.width }}" height="{{ context.height }}"></canvas>
+            <div id="magnifier" aria-hidden="true"><span id="magnification-label">4×</span></div>
           </div>
-          <p class="hint">Click a panorama pixel to calculate its ground-plane intersection.</p>
+          <p class="hint">Click a panorama pixel to calculate its ground-plane intersection. Mouse wheel changes magnification.</p>
         </article>
         <article>
           <h2>Pitch reference</h2>
           <canvas id="pitch" width="900" height="600"></canvas>
-          <p class="hint">Field markings are visual reference only; they do not change geometry.</p>
+          <p class="hint">Blue diamond = expected landmark; yellow/orange circle = measured click. Field markings are visual reference only.</p>
         </article>
       </section>
 
       <section class="readout">
         <h2>Selected points</h2>
         <p id="empty-state">No panorama points selected.</p>
-        <ol id="point-list"></ol>
+        <div class="table-wrap">
+          <table id="point-table" hidden>
+            <thead>
+              <tr><th>#</th><th>Landmark</th><th>Pixel / UV</th><th>Expected X/Z</th><th>Measured X/Z</th><th>ΔX / ΔZ</th><th>Error</th><th>Status</th></tr>
+            </thead>
+            <tbody id="point-list"></tbody>
+          </table>
+        </div>
       </section>
 
       <script>
