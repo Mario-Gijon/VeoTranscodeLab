@@ -23,6 +23,7 @@ MAX_RESOURCES = 100
 INITIAL_CAPTURE_MS = 9_000
 POST_INTERACTIVE_CAPTURE_MS = 9_000
 INTERACTIVE_LABEL = re.compile(r"^\s*(interactive|interactivo)\s*$", re.IGNORECASE)
+PRIMARY_INTERACTIVE_SELECTOR = "button.interactive-player"
 MENU_LABEL = re.compile(
     r"interactive|interactivo|view|vista|camera|cámara|mode|modo|menu|more|más|options|opciones|"
     r"standard|estándar|panoramic|panorámica|tracking|seguimiento",
@@ -83,6 +84,50 @@ def probe_media(url: str, cookies: list[dict] | None = None) -> dict:
         return {}
 
 
+def wait_for_player(page) -> bool:
+    """Wait briefly for the default player/video before revealing its controls."""
+    try:
+        videos = page.locator("video")
+        if videos.count() == 0:
+            return False
+        videos.nth(0).wait_for(state="attached", timeout=5_000)
+        page.wait_for_timeout(300)
+        return True
+    except Exception:
+        return False
+
+
+def _hover_player(page) -> bool:
+    """Reveal player controls without clicking unrelated page content."""
+    for selector in ("video", "[data-testid*='player']", "[class*='player']"):
+        try:
+            locator = page.locator(selector)
+            if locator.count() and locator.nth(0).is_visible(timeout=500):
+                locator.nth(0).hover(timeout=1_500)
+                page.wait_for_timeout(350)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _unobstructed(button) -> bool:
+    """Allow a force click only when the real button owns its center pixel."""
+    try:
+        box = button.bounding_box()
+        if not box:
+            return False
+        return bool(button.evaluate(
+            """(element, point) => {
+                const top = document.elementFromPoint(point.x, point.y);
+                return Boolean(top && (top === element || element.contains(top)));
+            }""",
+            {"x": box["x"] + box["width"] / 2, "y": box["y"] + box["height"] / 2},
+        ))
+    except Exception:
+        return False
+
+
 def _click_first_visible(locator, attempt: str, attempts: list[str], before_click, restore_after_failure) -> tuple[bool, bool]:
     """Click one visible, user-facing control; never manufacture a player URL."""
     try:
@@ -121,6 +166,67 @@ def _control_label(control) -> str:
         return ""
 
 
+def _activate_primary_interactive(page, before_click, restore_after_failure) -> dict[str, object]:
+    """Use the observed Veo semantic button before any text/accessibility fallback."""
+    result: dict[str, object] = {
+        "primary_selector": PRIMARY_INTERACTIVE_SELECTOR,
+        "primary_selector_found": False,
+        "primary_selector_count": 0,
+        "primary_selector_visible": False,
+        "primary_selector_hover_required": False,
+        "primary_selector_click_succeeded": False,
+        "primary_selector_force_click_used": False,
+    }
+    try:
+        locator = page.locator(PRIMARY_INTERACTIVE_SELECTOR)
+        count = min(locator.count(), 12)
+    except Exception:
+        return result
+    result["primary_selector_count"] = count
+    result["primary_selector_found"] = count > 0
+    if not count:
+        return result
+
+    def visible_buttons():
+        visible = []
+        for index in range(count):
+            try:
+                button = locator.nth(index)
+                if button.is_visible(timeout=500):
+                    visible.append(button)
+            except Exception:
+                continue
+        return visible
+
+    buttons = visible_buttons()
+    if not buttons:
+        result["primary_selector_hover_required"] = True
+        _hover_player(page)
+        buttons = visible_buttons()
+    result["primary_selector_visible"] = bool(buttons)
+    for button in buttons:
+        previous_phase = before_click()
+        try:
+            button.click(timeout=2_000)
+            result["primary_selector_click_succeeded"] = True
+            return result
+        except Exception:
+            restore_after_failure(previous_phase)
+        # `force=True` is constrained to an attached, visible, exact semantic
+        # button whose center is not covered by another element.
+        if not _unobstructed(button):
+            continue
+        previous_phase = before_click()
+        try:
+            button.click(timeout=2_000, force=True)
+            result["primary_selector_click_succeeded"] = True
+            result["primary_selector_force_click_used"] = True
+            return result
+        except Exception:
+            restore_after_failure(previous_phase)
+    return result
+
+
 def activate_interactive(page, before_click, restore_after_failure) -> dict[str, object]:
     """Open Interactive explicitly, including accessible menu-based controls.
 
@@ -128,8 +234,12 @@ def activate_interactive(page, before_click, restore_after_failure) -> dict[str,
     visible controls whose own text indicates a view/menu; it does not click
     arbitrary page content or guess private player endpoints.
     """
-    attempts: list[str] = []
+    primary = _activate_primary_interactive(page, before_click, restore_after_failure)
+    attempts: list[str] = ["button.interactive-player"] if primary["primary_selector_click_succeeded"] else []
     menu_controls: list[str] = []
+    found = bool(primary["primary_selector_found"])
+    if primary["primary_selector_click_succeeded"]:
+        return {**primary, "interactive_control_found": True, "interactive_click_succeeded": True, "interactive_attempts": attempts, "menu_controls_inspected": menu_controls}
 
     def direct_control() -> tuple[bool, bool]:
         found = False
@@ -147,9 +257,10 @@ def activate_interactive(page, before_click, restore_after_failure) -> dict[str,
                 return found, True
         return found, False
 
-    found, succeeded = direct_control()
+    fallback_found, succeeded = direct_control()
+    found = found or fallback_found
     if succeeded:
-        return {"interactive_control_found": True, "interactive_click_succeeded": True, "interactive_attempts": attempts, "menu_controls_inspected": menu_controls}
+        return {**primary, "interactive_control_found": True, "interactive_click_succeeded": True, "interactive_attempts": attempts, "menu_controls_inspected": menu_controls}
 
     try:
         controls = page.locator("button, [role='button'], [aria-haspopup='menu'], [aria-expanded]")
@@ -180,8 +291,8 @@ def activate_interactive(page, before_click, restore_after_failure) -> dict[str,
         discovered, succeeded = direct_control()
         found = found or discovered
         if succeeded:
-            return {"interactive_control_found": True, "interactive_click_succeeded": True, "interactive_attempts": attempts, "menu_controls_inspected": menu_controls}
-    return {"interactive_control_found": found, "interactive_click_succeeded": False, "interactive_attempts": attempts, "menu_controls_inspected": menu_controls}
+            return {**primary, "interactive_control_found": True, "interactive_click_succeeded": True, "interactive_attempts": attempts, "menu_controls_inspected": menu_controls}
+    return {**primary, "interactive_control_found": found, "interactive_click_succeeded": False, "interactive_attempts": attempts, "menu_controls_inspected": menu_controls}
 
 
 def _candidate_reference(candidate: VeoCandidate) -> dict[str, object]:
@@ -195,10 +306,25 @@ def phase_diagnostics(candidates: list[VeoCandidate], interaction: dict[str, obj
     def final(role: str) -> list[dict[str, object]]:
         return [_candidate_reference(candidate) for candidate in candidates if candidate.role == role]
 
+    expected_after_click = [
+        candidate for candidate in candidates
+        if AFTER_INTERACTIVE_PHASE in candidate.discovery_phases
+        and (candidate.filename.lower().startswith("transcode-") and candidate.filename.lower().endswith(".mp4")
+             or candidate.filename.lower().endswith(".veo") or "camera_alignment" in candidate.filename.lower())
+    ]
+
     return {
         "default_phase_resources": in_phase(INITIAL_PHASE),
         "interactive_control_found": interaction["interactive_control_found"],
         "interactive_click_succeeded": interaction["interactive_click_succeeded"],
+        "interactive_activation_confirmed": bool(interaction["interactive_click_succeeded"] and expected_after_click),
+        "primary_selector": interaction.get("primary_selector", PRIMARY_INTERACTIVE_SELECTOR),
+        "primary_selector_found": interaction.get("primary_selector_found", False),
+        "primary_selector_count": interaction.get("primary_selector_count", 0),
+        "primary_selector_visible": interaction.get("primary_selector_visible", False),
+        "primary_selector_hover_required": interaction.get("primary_selector_hover_required", False),
+        "primary_selector_click_succeeded": interaction.get("primary_selector_click_succeeded", False),
+        "primary_selector_force_click_used": interaction.get("primary_selector_force_click_used", False),
         "interactive_attempts": interaction["interactive_attempts"],
         "menu_controls_inspected": interaction["menu_controls_inspected"],
         "post_interactive_resources": in_phase(AFTER_INTERACTIVE_PHASE),
@@ -268,6 +394,7 @@ def inspect_match(match_url: str, profile_dir: Path, diagnostics_dir: Path) -> V
         }
         try:
             page.goto(target, wait_until="domcontentloaded", timeout=30_000)
+            player_ready = wait_for_player(page)
             page.wait_for_timeout(INITIAL_CAPTURE_MS)
 
             def start_interactive_phase() -> str:
@@ -281,6 +408,7 @@ def inspect_match(match_url: str, profile_dir: Path, diagnostics_dir: Path) -> V
                 phase = previous_phase
 
             interaction = activate_interactive(page, start_interactive_phase, restore_phase)
+            interaction["player_ready"] = player_ready
             if interaction["interactive_click_succeeded"]:
                 page.wait_for_timeout(POST_INTERACTIVE_CAPTURE_MS)
 

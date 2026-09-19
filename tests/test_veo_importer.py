@@ -47,7 +47,83 @@ def test_default_and_interactive_discovery_phases_drive_classification_and_diagn
     assert [item["identifier"] for item in diagnostics["final_classified_assets"]["tracking"]] == ["tracking"]
     assert [item["identifier"] for item in diagnostics["final_classified_assets"]["dual_lens"]] == ["dual"]
     assert [item["identifier"] for item in diagnostics["final_classified_assets"]["calibration"]] == ["calibration"]
+    assert diagnostics["interactive_activation_confirmed"] is True
     assert "private" not in str(diagnostics)
+
+
+def test_exact_interactive_player_button_is_preferred_over_text_fallback():
+    class Button:
+        def is_visible(self, **_kwargs):
+            return True
+        def click(self, **_kwargs):
+            clicks.append("primary")
+
+    class Locator:
+        def count(self):
+            return 1
+        def nth(self, _index):
+            return Button()
+
+    class Page:
+        def locator(self, selector):
+            selectors.append(selector)
+            return Locator()
+        def get_by_role(self, *_args, **_kwargs):
+            raise AssertionError("text/accessibility fallback must not run")
+        def get_by_text(self, *_args, **_kwargs):
+            raise AssertionError("text fallback must not run")
+
+    selectors, clicks, phases = [], [], []
+    result = activate_interactive(Page(), lambda: phases.append(AFTER_INTERACTIVE_PHASE) or INITIAL_PHASE, phases.append)
+    assert selectors == ["button.interactive-player"]
+    assert clicks == ["primary"] and phases == [AFTER_INTERACTIVE_PHASE]
+    assert result["primary_selector_found"] is True
+    assert result["primary_selector_count"] == 1
+    assert result["primary_selector_visible"] is True
+    assert result["primary_selector_click_succeeded"] is True
+
+
+def test_primary_interactive_button_hidden_until_player_hover_is_retried():
+    class PrimaryButton:
+        def is_visible(self, **_kwargs):
+            return state["visible"]
+        def click(self, **_kwargs):
+            clicks.append("primary")
+
+    class Video:
+        def is_visible(self, **_kwargs):
+            return True
+        def hover(self, **_kwargs):
+            state["visible"] = True
+
+    class Locator:
+        def __init__(self, element):
+            self.element = element
+        def count(self):
+            return 1
+        def nth(self, _index):
+            return self.element
+
+    class Page:
+        def locator(self, selector):
+            if selector == "button.interactive-player":
+                return Locator(PrimaryButton())
+            if selector == "video":
+                return Locator(Video())
+            raise AssertionError(f"Unexpected hover selector: {selector}")
+        def wait_for_timeout(self, _milliseconds):
+            pass
+        def get_by_role(self, *_args, **_kwargs):
+            raise AssertionError("fallback must not run")
+        def get_by_text(self, *_args, **_kwargs):
+            raise AssertionError("fallback must not run")
+
+    state, clicks, phases = {"visible": False}, [], []
+    result = activate_interactive(Page(), lambda: phases.append(AFTER_INTERACTIVE_PHASE) or INITIAL_PHASE, phases.append)
+    assert clicks == ["primary"]
+    assert result["primary_selector_hover_required"] is True
+    assert result["primary_selector_visible"] is True
+    assert result["primary_selector_click_succeeded"] is True
 
 
 def test_interactive_activation_prefers_accessibility_queries_and_supports_spanish_label():

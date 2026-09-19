@@ -128,8 +128,11 @@ default player view, then deliberately opens **Interactive** (also supporting
 discovery phase alongside evidence/confidence and available metadata: the
 initial `video.mp4` is a strong Tracking candidate, while post-Interactive
 `transcode-*.mp4` and `camera_alignment-*.veo` are strong dual-lens and
-calibration candidates. The inspector tries accessible controls first, then
-relevant visible player menus, and reports whether the action succeeded.
+calibration candidates. The inspector first uses the observed semantic
+`button.interactive-player`, hovering the player to reveal it when necessary;
+accessible/text controls and relevant visible menus remain fallbacks. It reports
+selector presence/count/visibility, hover/click use, and whether expected
+post-Interactive traffic confirmed activation.
 Explicitly assign ambiguous videos or leave them skipped. Streaming manifests
 are shown as evidence, not downloaded as fake MP4 files. Metadata inspection can
 fetch bounded file prefixes, but full assets download only after **Import match**.

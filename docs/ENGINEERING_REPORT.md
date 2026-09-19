@@ -166,8 +166,9 @@ query values and fragments. Do not commit runtime data or share browser profiles
 
 The inspector attaches its response listener before navigation/player
 initialization. It first records the default player phase, deliberately opens
-the visible **Interactive**/**Interactivo** mode using accessible controls (then
-relevant player-menu fallbacks), and records the post-Interactive phase. It
+the observed `button.interactive-player` after hovering the player when needed.
+Accessible **Interactive**/**Interactivo** controls and relevant player-menu
+fallbacks remain available, and the post-Interactive phase is recorded. It
 combines that phase evidence with filename/path, MIME, and optional 2048×2048
 probe evidence: initial `video.mp4` strongly indicates Tracking; a
 post-Interactive `transcode-*.mp4` strongly indicates the dual-lens source;
@@ -324,7 +325,7 @@ state is working playback with disabled metric clicks, not a fabricated map.
   responsive coordinate/crop tests, production build.
 - `git diff --check`; no diff in the four protected modules or original assets.
 
-Final run: compilation passed; **42 pytest tests passed**; FastAPI startup and
+Final run: compilation passed; **44 pytest tests passed**; FastAPI startup and
 OpenAPI passed; Chromium parity/workflow passed; TypeScript, lint, coordinate
 assertions and production build passed; tracked and new-file whitespace checks
 passed. SHA-256 verification and Git diff confirm all four protected modules
