@@ -40,29 +40,45 @@ renders. Results are written to the selected output directory.
 The two available matches have both been reproduced and validated with their
 corresponding `.veo` files.
 
-## Geometry validation tool
+## Local geometry development app
 
-The local validation app renders an uploaded 2048×2048 stacked frame, then
-maps panorama clicks to their Y=0 world-plane intersections and displays their
-X/Z positions on a canonical pitch. It is a validation tool only: it does not
-alter the calibration or fit any geometry.
+`dev_app/` is a local FastAPI + React/Vite workspace for validating
+panorama-to-pitch geometry. It consumes the validated Python renderer and
+ground-intersection helpers without changing or duplicating their math.
+
+Start the backend from the repository root:
 
 ```bash
-pip install Flask
-python dev_app/app.py
+.venv/bin/pip install -r dev_app/backend/requirements.txt
+.venv/bin/uvicorn dev_app.backend.app.main:app --reload
 ```
 
-Open `http://127.0.0.1:5000`, upload a stacked frame, select or upload its
-matching `.veo` file, and render at 1920×1080 or 3840×2160. The browser scales
-the click back to the renderer's actual panorama pixel; Python then applies
-the same panorama ray conventions as the validated renderer and reports the
-ground-plane X/Z point. Multiple clicks remain visible on both the panorama
-and pitch reference. Use **Selected landmark** mode to compare a panorama
-click with a field-dimension-derived center mark, penalty spot, corner,
-penalty-area corner, or goal-area corner; the reported field error is only a
-validation measurement. A cursor magnifier follows the panorama pointer for
-precise selection; use the mouse wheel over the panorama to adjust it from
-2× to 10×.
+Then start the frontend in another terminal:
+
+```bash
+cd dev_app/frontend
+npm install
+npm run dev
+```
+
+Open `http://127.0.0.1:5173`. FastAPI's local API documentation is available
+at `http://127.0.0.1:8000/docs`.
+
+Create a match workspace, associate its `.veo` calibration, then add reusable
+media. An existing local path is recorded by reference; browser uploads and
+extracted video frames are stored under the Git-ignored `dev_app/runtime/`
+directory. Supported media are JPG/PNG/WebP images and MP4/MOV/MKV/AVI/WebM
+video or clips. Select a 2048×2048 stacked frame to render a 1920×1080 or
+3840×2160 panorama immediately. For video, position the player at a timestamp
+and use **Use current frame** before rendering.
+
+The normal workflow is **match → media → frame → panorama → click → pitch**.
+The React client only visualizes returned results: its responsive panorama
+viewer maps CSS coordinates to the rendered natural pixel for the backend,
+and its 2×–10× cursor magnifier uses that same source pixel. Python remains
+the authority for rendering, landmark validation, and panorama-to-ground
+intersection. Landmark error is a measurement only; the app does not fit,
+tune, or alter the calibration.
 
 ## Repository contents and next work
 
@@ -72,7 +88,10 @@ precise selection; use the mouse wheel over the panorama to adjust it from
   also be present at the repository root and are ignored by Git.
 - `reference/` contains the captured Veo Panoramic shaders, uniforms, and
   reference panorama image.
-- `dev_app/` contains the local panorama-to-pitch geometry validation UI.
+- `dev_app/backend/` contains the local FastAPI API, filesystem workspace
+  store, media adapters, render cache, and API schemas.
+- `dev_app/frontend/` contains the Material UI React/Vite client: Library,
+  Workspace, panorama viewer, SVG pitch, and validation table.
 - `tests/` contains focused checks for the panorama click-to-ground helper.
 - `output/` is intentionally preserved as historical visual evidence and is
   ignored by Git.

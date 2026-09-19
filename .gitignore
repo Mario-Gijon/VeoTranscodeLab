@@ -2,3 +2,7 @@
 output/
 .venv/
 __pycache__/
+dev_app/runtime/
+dev_app/frontend/node_modules/
+dev_app/frontend/dist/
+dev_app/frontend/*.tsbuildinfo
