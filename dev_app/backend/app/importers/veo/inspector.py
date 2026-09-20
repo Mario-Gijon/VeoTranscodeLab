@@ -872,9 +872,9 @@ def inspect_match(match_url: str, diagnostics_dir: Path) -> VeoInspection:
     metadata_highlights_videos: list[str] = []
     initial_player_url: str | None = None
     metadata: dict[str, str] = {}
-    structured = StructuredDiscovery()
     phase = INITIAL_PHASE
     inspection_identifier = f"inspect_{uuid.uuid4().hex[:12]}"
+    structured = StructuredDiscovery(diagnostics_dir / f"{inspection_identifier}-datasets")
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
     screenshot_before = diagnostics_dir / f"{inspection_identifier}-before-interactive.png"
     screenshot_after = diagnostics_dir / f"{inspection_identifier}-after-interactive.png"
@@ -916,6 +916,8 @@ def inspect_match(match_url: str, diagnostics_dir: Path) -> VeoInspection:
             if resource is not None and total.isdigit():
                 resource["size_bytes"] = int(total)
             payload = bounded_json_response(response)
+            if payload is None and "json" in (content or ""):
+                structured.observe_json(response.url, None, phase, status_code=response.status)
             if payload is not None:
                 structured.observe_json(response.url, payload, phase, status_code=response.status)
                 for link in resource_links(payload, limit=MAX_RESOURCES):
@@ -1142,6 +1144,7 @@ def inspect_match(match_url: str, diagnostics_dir: Path) -> VeoInspection:
         match_url=target,
         safe_match_url=sanitize_url(target),
         metadata=metadata,
+        dataset_observations=structured.observations,
         candidates=candidates,
         interaction=phase_diagnostics(candidates, interaction),
         access_error=(
@@ -1162,7 +1165,7 @@ def inspect_match(match_url: str, diagnostics_dir: Path) -> VeoInspection:
         role = {"ball_tracking": "tracking", "panorama": "dual_lens"}.get(candidate.role, candidate.role)
         if role in assets and assets[role] is None:
             assets[role] = candidate.public_dict()
-    inspection.manifest = structured.manifest(metadata, assets, {
+    inspection.manifest = structured.manifest({**metadata, "source_url": inspection.safe_match_url}, assets, {
         "inspection_id": inspection_identifier,
         "browser_phases": [INITIAL_PHASE, AFTER_INTERACTIVE_PHASE],
         "interactive": inspection.interaction.get("activation"),

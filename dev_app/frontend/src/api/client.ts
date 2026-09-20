@@ -3,7 +3,7 @@ import type { Calibration, GroundPoint, MatchWorkspace, MediaItem, RenderedPanor
 const baseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000'
 const url = (path: string) => `${baseUrl}${path}`
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url(path), init)
   if (!response.ok) {
     const body = await response.json().catch(() => ({})) as { detail?: { message?: string } | string }

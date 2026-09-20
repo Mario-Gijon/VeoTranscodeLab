@@ -138,6 +138,10 @@ Measurements remain session-only; no hidden correction or homography was added.
 
 ## Future analysis foundation
 
+The current dataset/event/artifact foundation supersedes the original illustrative
+contracts described below. See [Match data architecture](MATCH_DATA_ARCHITECTURE.md)
+for storage, APIs, the shared event timeline and the next person-detection stage.
+
 `backend/app/analysis_layers.py` supplies Pydantic contracts for stage definitions,
 stage runs, analysis runs and artifacts. They describe id/version, required and
 produced artifact types, configuration/status, and Match/source-media/run

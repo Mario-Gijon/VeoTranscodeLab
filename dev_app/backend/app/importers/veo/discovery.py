@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from .classifier import sanitize_url
+from ...match_data import DatasetObservation
+from ...artifacts import atomic_json
 
 MAX_UNKNOWN_ITEMS = 20
 MAX_UNKNOWN_BYTES = 48_000
@@ -33,13 +38,13 @@ BEARER_PATTERN = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{10,}")
 URL_PATTERN = re.compile(r"https?://[^\s\"'<>]+")
 
 
-def _safe_value(value: Any, key: str | None = None) -> Any:
+def _safe_value(value: Any, key: str | None = None, *, full: bool = False) -> Any:
     if key and any(secret in key.lower() for secret in SECRET_KEYS):
         return "<REDACTED>"
     if isinstance(value, dict):
-        return {str(name): _safe_value(item, str(name)) for name, item in value.items()}
+        return {str(name): _safe_value(item, str(name), full=full) for name, item in value.items()}
     if isinstance(value, list):
-        return [_safe_value(item) for item in value[:200]]
+        return [_safe_value(item, full=full) for item in (value if full else value[:200])]
     if isinstance(value, str) and value.startswith(("https://", "http://")):
         return sanitize_url(value)
     if isinstance(value, str):
@@ -80,7 +85,7 @@ def classify_endpoint(url: str) -> str | None:
     parsed = urlsplit(url)
     host = (parsed.hostname or "").lower()
     path = parsed.path.lower()
-    if not (host == "veo.co" or host.endswith(".veo.co") or host.endswith("veocdn.com")):
+    if not (host == "veo.co" or host.endswith(".veo.co") or host == "veocdn.com" or host.endswith(".veocdn.com")):
         return None
     for dataset, pattern in KNOWN_ENDPOINTS.items():
         if pattern.search(path):
@@ -95,32 +100,63 @@ def dataset_status(dataset: str, status_code: int, payload: Any) -> str:
         return "unavailable"
     if not 200 <= status_code < 300:
         return "not_observed"
-    if payload is None or payload == [] or payload == {}:
+    if payload is None:
+        return "not_observed"
+    if payload == [] or payload == {}:
         return "empty"
     if isinstance(payload, dict):
-        values = [value for key, value in payload.items() if key.lower() not in {"metadata", "permissions", "capabilities", "match"}]
-        if not values or all(value is None or value == [] or value == {} for value in values):
+        for key in ("results", "items", "data", dataset):
+            if key in payload and payload[key] == []:
+                return "empty"
+        signals = {"metadata", "permissions", "capabilities", "match", "tracking_available", *CAPABILITIES}
+        values = [value for key, value in payload.items() if key.lower() not in signals]
+        if not values:
+            return "not_observed"
+        if all(value is None or value == [] or value == {} for value in values):
             return "empty"
     return "observed"
 
 
 class StructuredDiscovery:
-    def __init__(self) -> None:
+    def __init__(self, capture_dir: Path | None = None) -> None:
+        self.capture_dir = capture_dir
+        self.observations: list[DatasetObservation] = []
         self.responses: list[dict[str, Any]] = []
         self.references: list[dict[str, Any]] = []
         self.unknown: list[dict[str, Any]] = []
         self.dataset_evidence: dict[str, list[dict[str, Any]]] = {name: [] for name in DATASETS}
         self.capability_evidence: dict[str, list[dict[str, Any]]] = {name: [] for name in CAPABILITIES}
 
-    def observe_json(self, url: str, payload: Any, phase: str, source: str = "json_response", status_code: int = 200) -> None:
+    def observe_json(self, url: str, payload: Any, phase: str, source: str = "json_response", status_code: int = 200,
+                     observed_at: str | None = None) -> None:
         category = classify_endpoint(url)
         parsed = urlsplit(url)
         path = parsed.path
         safe_endpoint = sanitize_url(urlunsplit((parsed.scheme, parsed.netloc, path, "", "")))
         if category:
             status = dataset_status(category, status_code, payload)
+            timestamp = observed_at or datetime.now(UTC).isoformat()
+            # Diagnostics are bounded; persisted datasets must not silently lose
+            # rows. HTTP capture still applies its existing response-byte limit.
+            safe_payload = _safe_value(payload, full=True)
+            identity = json.dumps([safe_endpoint, phase, timestamp, status_code, safe_payload], sort_keys=True)
+            identifier = "observation_" + hashlib.sha256(identity.encode()).hexdigest()[:24]
+            observation = DatasetObservation(id=identifier,
+                source_match=re.search(r"/matches/([^/]+)", path, re.I).group(1),
+                dataset=category, endpoint=safe_endpoint, phase=phase,
+                observed_at=timestamp, context=source, status=status, http_status=status_code,
+                payload_observed=payload is not None)
+            if self.capture_dir:
+                if payload is not None:
+                    destination = self.capture_dir / f"{identifier}-payload.json"
+                    atomic_json(destination, safe_payload)
+                    observation.payload_path = str(destination.resolve())
+                atomic_json(self.capture_dir / f"{identifier}.json", observation.model_dump(mode="json"))
+            self.observations.append(observation)
             evidence = {"status": status, "endpoint": safe_endpoint, "phase": phase, "source": source,
-                        "http_status": status_code, "payload": _bounded(payload, MAX_DATASET_BYTES)}
+                        "http_status": status_code, "payload_observed": payload is not None,
+                        "observed_at": timestamp, "parser_version": observation.parser_version,
+                        "payload": _bounded(payload, MAX_DATASET_BYTES)}
             self.dataset_evidence[category].append(evidence)
             self.responses.append({"url": safe_endpoint, "phase": phase, "source": source, "http_status": status_code, "category": category, "dataset_status": status})
         elif MATCH_PATH.search(path):

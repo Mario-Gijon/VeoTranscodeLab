@@ -34,7 +34,6 @@ export default function MatchViewer({ media, mode, crop, context, width, videoRe
   const [hover, setHover] = useState(false)
   const live = useRef({ mode, crop, width })
   useEffect(() => { live.current = { mode, crop, width }; gesture.current = null; pointer.current = null; setHover(false) }, [mode, crop, width])
-  const pausedAt = useRef(initialTime)
   const sourceUrl = api.url(media.url)
   const outputWidth = mode === 'panorama' ? width : 2048
   const outputHeight = mode === 'panorama' ? width * 9 / 16 : crop === 'stacked' ? 2048 : 1024
@@ -128,7 +127,7 @@ export default function MatchViewer({ media, mode, crop, context, width, videoRe
         video.pause(); onTime(video.currentTime)
         onClick(pixel.x, pixel.y, { width: video.videoWidth, height: video.videoHeight, timestamp: video.currentTime })
       }}
-      onLoadedMetadata={(event) => { event.currentTarget.currentTime = Math.min(pausedAt.current, Math.max(0, event.currentTarget.duration - .001)) }}
+      onLoadedMetadata={(event) => { event.currentTarget.currentTime = Math.min(initialTime, Math.max(0, event.currentTarget.duration - .001)) }}
       onTimeUpdate={(event) => onTime(event.currentTarget.currentTime)}
       onPlay={() => onPlayback(true)} onPause={() => onPlayback(false)} onEnded={() => onPlayback(false)}
       onError={() => setError('El navegador no puede reproducir el códec de esta fuente. El archivo original se conserva; prueba a renderizar un fotograma.')} />

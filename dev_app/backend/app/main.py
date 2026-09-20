@@ -33,6 +33,7 @@ from .services import (
     validate_media_role,
 )
 from .storage import WorkspaceStore
+from .data_api import data_router
 from .schemas import MediaRoleRequest, ViewPointRequest, RenameMatchRequest, TrackingPointRequest
 from .view_geometry import view_context, contexts
 from analysis.raw_ground import raw_pixel_to_ground
@@ -54,6 +55,7 @@ tracking_cache: dict[tuple[str, int], LegacyCameraDirections] = {}
 veo_imports = VeoImportService(store, RUNTIME_ROOT)
 
 app = FastAPI(title="Veo Match Lab", version="2.0.0")
+app.include_router(data_router(lambda: store))
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.environ.get("VEO_FRONTEND_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","),
@@ -116,7 +118,8 @@ def match_summary(match: dict[str, Any]) -> dict[str, Any]:
     status = match.get("import_status")
     if status in {"queued", "downloading"} and not veo_imports.active_for_match(match["id"]):
         status = "interrupted"
-    return {**match, "media_count": len(match["media"]), "import_status": status}
+    return {**{key: value for key, value in match.items() if key != "structured_data"},
+            "media_count": len(match["media"]), "import_status": status}
 
 
 def public_media(media: dict[str, Any]) -> dict[str, Any]:

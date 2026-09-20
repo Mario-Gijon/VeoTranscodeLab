@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
+from ...match_data import DatasetObservation
 
 
 def importable(candidate: VeoCandidate) -> bool:
@@ -60,6 +61,7 @@ class VeoInspection:
     diagnostic_path: str | None = None
     access_error: str | None = None
     manifest: dict[str, Any] = field(default_factory=dict)
+    dataset_observations: list[DatasetObservation] = field(default_factory=list, repr=False)
 
     def public_dict(self) -> dict[str, Any]:
         resolved = {}

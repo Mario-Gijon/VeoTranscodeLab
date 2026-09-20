@@ -44,7 +44,7 @@ class WorkspaceStore:
         return directory
 
     def asset_dir(self, match_id: str, category: str) -> Path:
-        if category not in {"media", "frames", "calibration", "cache", "diagnostics", "clips", "analysis"}:
+        if category not in {"media", "frames", "calibration", "cache", "diagnostics", "clips", "analysis", "datasets", "artifacts"}:
             raise ValueError("Invalid asset category")
         path = self.match_dir(match_id) / category
         if path.is_symlink() or path.resolve().parent != self.match_dir(match_id).resolve():

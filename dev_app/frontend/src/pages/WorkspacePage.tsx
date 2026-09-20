@@ -3,7 +3,7 @@ import Replay10Icon from '@mui/icons-material/Replay10'
 import Forward10Icon from '@mui/icons-material/Forward10'
 import PauseIcon from '@mui/icons-material/Pause'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
-import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Divider, FormControl, IconButton, InputLabel, LinearProgress, MenuItem, Select, Slider, Stack, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material'
+import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Divider, FormControl, IconButton, InputLabel, LinearProgress, MenuItem, Select, Stack, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material'
 import { api } from '../api/client'
 import ManageFilesDialog from '../components/ManageFilesDialog'
 import MatchViewer from '../components/MatchViewer'
@@ -15,12 +15,17 @@ import { clampMediaTime, formatMediaTime } from '../components/mediaTime'
 import PanoramaViewer from '../components/PanoramaViewer'
 import PitchSvg from '../components/PitchSvg'
 import ValidationTable from '../components/ValidationTable'
+import EventsPanel from '../components/EventsPanel'
+import MatchTimeline from '../components/MatchTimeline'
+import { useMatchEvents } from '../hooks/useMatchEvents'
+import type { MatchEvent } from '../types/matchData'
 import type { Calibration, GroundPoint, MatchWorkspace, MediaItem, RenderedPanorama, ViewContext } from '../types'
 
 interface Props { matchId: string; calibrations: Calibration[]; onBack: () => void }
 
 export default function WorkspacePage({ matchId, calibrations, onBack }: Props) {
   const [match, setMatch] = useState<MatchWorkspace | null>(null)
+  const events = useMatchEvents(matchId, match?.updated_at)
   const [context, setContext] = useState<ViewContext | null>(null)
   const [mode, setMode] = useState<ViewMode>('panorama')
   const [crop, setCrop] = useState('stacked')
@@ -66,13 +71,20 @@ export default function WorkspacePage({ matchId, calibrations, onBack }: Props) 
   const highlights = match?.media.find((item) => item.role === 'veo_highlights')
   const duration = source?.duration_s ?? 0
   const playbackDisabled = !source || !!frameRender || !!stillImage
+  const canSeekEvent = !!source && (!['panorama', 'interactive'].includes(mode) || !!context)
   const seek = (value: number) => {
     const next = clampMediaTime(value, duration)
-    if (video.current) video.current.currentTime = next
+    if (video.current && video.current.readyState >= 1) video.current.currentTime = next
     setTime(next)
   }
+  const seekEvent = (event: MatchEvent) => {
+    if (!canSeekEvent) return
+    video.current?.pause(); setPlaying(false)
+    generation.current++; setFrameRender(null); setStillImage(null)
+    seek(event.start_s)
+  }
   const switchView = (value: ViewMode) => {
-    setTime(matchTimestamp(video.current, time))
+    setTime(video.current && video.current.readyState >= 1 ? matchTimestamp(video.current, time) : time)
     generation.current++; setMode(value); setFrameRender(null); setStillImage(null)
     if ((value === 'tracking') !== (mode === 'tracking')) { video.current?.pause(); setPlaying(false) }
   }
@@ -121,13 +133,16 @@ export default function WorkspacePage({ matchId, calibrations, onBack }: Props) 
           <Tooltip title="Avanzar 10 segundos"><span><IconButton aria-label="Avanzar 10 segundos" disabled={playbackDisabled} onClick={() => { video.current?.pause(); seek(time + 10) }}><Forward10Icon /></IconButton></span></Tooltip>
           <Typography aria-label="Tiempo del vídeo" variant="body2" sx={{ minWidth: 112, fontVariantNumeric: 'tabular-nums' }}>{formatMediaTime(time)} / {formatMediaTime(duration)}</Typography>
           {frameRender && <Button onClick={() => { setFrameRender(null); generation.current++ }}>Volver al vídeo</Button>}
-        </Stack><Slider aria-label="Línea de tiempo del partido" value={Math.min(time, duration)} max={duration || 1} step={source?.fps ? 1 / source.fps : .04} disabled={playbackDisabled} onChange={(_, value) => seek(value as number)} />
+        </Stack><MatchTimeline time={time} duration={duration} fps={source?.fps} disabled={playbackDisabled} eventsDisabled={!canSeekEvent} events={events.events} onSeek={seek} onEvent={seekEvent} />
       </Box>
       <Box minWidth={0}><Typography variant="subtitle1">Campo</Typography>{context ? <PitchSvg length={context.field_length} width={context.field_width} points={pitchPoints(points)} /> : <Alert severity="info">Las dimensiones del campo estarán disponibles al seleccionar una calibración.</Alert>}
         {mode === 'tracking' || mode === 'interactive' ? <Typography variant="caption">{selectionEnabled ? (mode === 'tracking' && !context?.tracking_geometry.available ? 'La selección no está disponible para este vídeo.' : 'Haz clic en el campo para seleccionar un punto.') : 'Seleccionar está desactivado; las mediciones existentes se conservan.'}</Typography> : <Stack spacing={1} mt={1}><FormControl size="small"><InputLabel shrink>Modo de clic / hito</InputLabel><Select displayEmpty renderValue={(value) => value ? context?.landmarks.find((item) => item.id === value)?.name : 'Punto libre'} label="Modo de clic / hito" value={landmark} onChange={(e) => setLandmark(e.target.value)}><MenuItem value="">Punto libre</MenuItem>{context?.landmarks.map((item) => <MenuItem key={item.id} value={item.id}>{item.name} · {item.x.toFixed(2)}, {item.z.toFixed(2)} m</MenuItem>)}</Select></FormControl><Typography variant="caption">{selectionEnabled ? 'La validación mide el error de calibración; no corrige la geometría.' : 'Seleccionar está desactivado; las mediciones existentes se conservan.'}</Typography></Stack>}
         <Button onClick={() => { setPoints([]); generation.current++ }}>Borrar puntos</Button>
       </Box>
-    </Box>{points.length > 0 && <><Divider sx={{ my: 1 }} /><Accordion disableGutters><AccordionSummary>Mediciones · {points.length} puntos</AccordionSummary><AccordionDetails><ValidationTable points={points} /></AccordionDetails></Accordion></>}
+    </Box>
+    {events.error && <Alert severity="warning">{events.error}</Alert>}
+    <EventsPanel events={events.events} total={events.total} canSeek={canSeekEvent} loading={events.loading} hasMore={events.next !== null} onMore={events.loadMore} onEvent={seekEvent} />
+    {points.length > 0 && <><Divider sx={{ my: 1 }} /><Accordion disableGutters><AccordionSummary>Mediciones · {points.length} puntos</AccordionSummary><AccordionDetails><ValidationTable points={points} /></AccordionDetails></Accordion></>}
     {highlights && <Dialog open={highlightsOpen} onClose={() => { highlightsVideo.current?.pause(); setHighlightsOpen(false) }} fullWidth maxWidth="lg"><DialogTitle>Vídeos destacados de Veo</DialogTitle><DialogContent><video ref={highlightsVideo} controls preload="metadata" src={api.url(highlights.url)} style={{ width: '100%', maxHeight: '70vh', background: '#080a0c' }} /></DialogContent><DialogActions><Button onClick={() => { highlightsVideo.current?.pause(); setHighlightsOpen(false) }}>Cerrar</Button></DialogActions></Dialog>}
   </Box>
 }

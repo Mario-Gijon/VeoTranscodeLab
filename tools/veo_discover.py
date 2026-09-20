@@ -20,10 +20,9 @@ if str(REPOSITORY_ROOT) not in __import__("sys").path:
 
 from dev_app.backend.app.importers.veo.classifier import sanitize_url
 from dev_app.backend.app.importers.veo.discovery import (
-    StructuredDiscovery,
-    classify_endpoint,
     write_manifest,
 )
+from dev_app.backend.app.importers.veo.datasets import replay_capture
 from dev_app.backend.app.importers.veo.inspector import (
     normalized_resource_url,
     standard_video_camera_directions,
@@ -1917,24 +1916,7 @@ def find_primary_assets(
 
 def build_structured_manifest(root: Path, match_url: str, primary_assets: dict, endpoints: list[dict], recorder) -> dict:
     """Interpret the tool's bounded JSON artifacts with the app's shared rules."""
-    discovery = StructuredDiscovery()
-    response_by_url = {item.get("url"): item for item in recorder.responses}
-    observed_urls = set()
-    for safe_url_value, relative_path in recorder.saved_bodies.items():
-        path = root / relative_path
-        if path.suffix != ".json" or not path.is_file():
-            continue
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        response = response_by_url.get(safe_url_value, {})
-        discovery.observe_json(safe_url_value, payload, response.get("phase", "captured"), "standalone_json_capture", response.get("status", 200))
-        observed_urls.add(safe_url_value)
-    for response in recorder.responses:
-        endpoint = response.get("url", "")
-        if endpoint not in observed_urls and classify_endpoint(endpoint):
-            discovery.observe_json(endpoint, None, response.get("phase", "captured"), "network_response", response.get("status", 0))
+    discovery = replay_capture(root, recorder.responses, recorder.saved_bodies, root / "datasets")
     assets = {"tracking": primary_assets.get("tracking"), "dual_lens": primary_assets.get("dual_lens"),
               "calibration": primary_assets.get("calibration"), "camera_directions": None}
     tracking_url = primary_assets.get("tracking")

@@ -13,6 +13,7 @@ from ...storage import WorkspaceStore
 from .downloader import download_stream
 from .inspector import inspect_match
 from .models import VeoInspection, importable
+from .datasets import persist_datasets
 
 
 @dataclass
@@ -116,6 +117,9 @@ class VeoImportService:
             self.store.update_match(match["id"], lambda item: item.update(import_status="downloading"))
             diagnostic = self.store.asset_dir(match["id"], "diagnostics") / "veo-inspection.json"
             diagnostic.write_text(json.dumps(inspection.public_dict(), indent=2), encoding="utf-8")
+            # Small structured data survives an interrupted large-media download.
+            if inspection.dataset_observations:
+                persist_datasets(self.store, match["id"], inspection.safe_match_url, inspection.dataset_observations)
             for role, candidate in selected.items():
                 if job.cancelled.is_set():
                     raise InterruptedError("Import cancelled.")
