@@ -1,4 +1,4 @@
-export type MediaKind = 'image' | 'frame' | 'video' | 'clip'
+export type MediaKind = 'image' | 'frame' | 'video' | 'clip' | 'resource'
 
 export interface ViewContext {
   id: string; field_length: number; field_width: number; landmarks: Landmark[]
@@ -20,7 +20,7 @@ export interface Calibration {
 
 export interface MediaItem {
   ownership?: 'managed' | 'external'
-  role?: 'tracking' | 'dual_lens' | 'clip' | 'image' | 'unknown'
+  role?: 'tracking' | 'dual_lens' | 'camera_directions' | 'clip' | 'image' | 'unknown'
   size_bytes?: number
   id: string
   name: string
@@ -92,6 +92,5 @@ export interface GroundPoint {
 export interface VeoCandidate { calibration_version?: string | null; identifier: string; safe_url: string; filename: string; content_type: string | null; role: string; confidence: number; reasons: string[]; discovery_phases: string[]; width: number | null; height: number | null; fps: number | null; duration_s: number | null; field_length: number | null; field_width: number | null }
 export interface VeoResourceReference { identifier: string; filename: string; safe_url: string; discovery_phases: string[] }
 export interface VeoInspectionInteraction { default_phase_resources: VeoResourceReference[]; interactive_control_found: boolean; interactive_click_succeeded: boolean; interactive_activation_confirmed: boolean; activation_method?: string | null; primary_selector: string; primary_selector_found: boolean; primary_selector_count: number; primary_selector_visible: boolean; primary_selector_hover_required: boolean; primary_selector_click_succeeded: boolean; primary_selector_force_click_used: boolean; interactive_attempts: string[]; menu_controls_inspected: string[]; post_interactive_resources: VeoResourceReference[]; final_classified_assets: { tracking: VeoResourceReference[]; dual_lens: VeoResourceReference[]; calibration: VeoResourceReference[] } }
-export interface VeoInspection { id: string; match_url: string; metadata: Record<string, string | null>; candidates: VeoCandidate[]; interaction: VeoInspectionInteraction; diagnostic_path: string | null; resolved_assets: Record<string, string>; ready: boolean }
-export interface VeoSession { error?: string | null; playwright_available: boolean; profile_exists: boolean; connect_browser_running: boolean }
+export interface VeoInspection { id: string; match_url: string; metadata: Record<string, string | null>; candidates: VeoCandidate[]; interaction: VeoInspectionInteraction; diagnostic_path: string | null; access_error?: string | null; resolved_assets: Record<string, string>; ready: boolean }
 export interface VeoJob { progress?: number | null; assets: Record<string, { status: string; filename: string; bytes_downloaded: number; bytes_total: number | null }>; completed_assets?: number; identifier: string; status: string; current_asset: string | null; bytes_downloaded: number; bytes_total: number | null; error: string | null; match_id: string | null }

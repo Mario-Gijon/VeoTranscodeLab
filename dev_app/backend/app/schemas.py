@@ -15,11 +15,11 @@ class CreateMatchRequest(BaseModel):
 
 class PathImportRequest(BaseModel):
     path: str = Field(min_length=1)
-    role: Literal["tracking", "dual_lens", "clip", "image", "unknown"] = "unknown"
+    role: Literal["tracking", "dual_lens", "camera_directions", "clip", "image", "unknown"] = "unknown"
 
 
 class MediaRoleRequest(BaseModel):
-    role: Literal["tracking", "dual_lens", "clip", "image", "unknown"]
+    role: Literal["tracking", "dual_lens", "camera_directions", "clip", "image", "unknown"]
 
 
 class ViewPointRequest(BaseModel):
@@ -30,6 +30,14 @@ class ViewPointRequest(BaseModel):
     width: Literal[1920, 3840, 2048] = 1920
     height: Literal[1080, 2160, 2048] = 1080
     landmark_id: str | None = None
+
+
+class TrackingPointRequest(BaseModel):
+    timestamp_s: float = Field(ge=0)
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    width: int = Field(gt=0, le=7680)
+    height: int = Field(gt=0, le=4320)
 
 
 class ExtractFrameRequest(BaseModel):

@@ -32,7 +32,7 @@ from .services import (
     validate_media_role,
 )
 from .storage import WorkspaceStore
-from .schemas import MediaRoleRequest, ViewPointRequest, RenameMatchRequest
+from .schemas import MediaRoleRequest, ViewPointRequest, RenameMatchRequest, TrackingPointRequest
 from .view_geometry import view_context, contexts
 from analysis.raw_ground import raw_pixel_to_ground
 
@@ -43,11 +43,13 @@ from analysis.panorama_ground import ground_intersection_for_pixel
 from analysis.panorama_landmarks import field_landmarks, landmark_validation
 from analysis.reproduce_veo_panorama import render
 from analysis.veo_metadata import load_veo_metadata
+from analysis.tracking_ground_v3 import DEFAULT_TRACKING_TUNING, LegacyCameraDirections, tracking_ground_for_pixel
 
 
 RUNTIME_ROOT = Path(os.environ.get("VEO_RUNTIME_ROOT", str(ROOT / "dev_app" / "runtime"))).resolve()
 store = WorkspaceStore(RUNTIME_ROOT)
 render_cache: dict[str, dict[str, Any]] = {}
+tracking_cache: dict[tuple[str, int], LegacyCameraDirections] = {}
 veo_imports = VeoImportService(store, RUNTIME_ROOT)
 
 app = FastAPI(title="Veo Match Lab", version="2.0.0")
@@ -95,6 +97,20 @@ def with_calibration(match: dict[str, Any]):
         raise api_error(422, "Could not read the workspace calibration; select a valid .veo file.", "invalid_calibration") from exc
 
 
+def with_camera_directions(match: dict[str, Any]) -> LegacyCameraDirections:
+    resource = next((item for item in match.get("media", []) if item.get("role") == "camera_directions"), None)
+    if not resource:
+        raise api_error(409, "Tracking field projection unavailable: camera directions missing.", "camera_directions_missing")
+    path = Path(resource["path"])
+    try:
+        key = (str(path.resolve()), path.stat().st_mtime_ns)
+        if key not in tracking_cache:
+            tracking_cache[key] = LegacyCameraDirections.load(path)
+        return tracking_cache[key]
+    except (OSError, ValueError) as exc:
+        raise api_error(422, "Could not read the match camera directions resource.", "invalid_camera_directions") from exc
+
+
 def match_summary(match: dict[str, Any]) -> dict[str, Any]:
     status = match.get("import_status")
     if status in {"queued", "downloading"} and not veo_imports.active_for_match(match["id"]):
@@ -116,31 +132,6 @@ def calibrations() -> list[dict[str, Any]]:
     return repository_calibrations()
 
 
-@app.get("/api/veo/session")
-def veo_session() -> dict[str, Any]:
-    return veo_imports.session()
-
-
-@app.post("/api/veo/connect")
-def connect_veo() -> dict[str, Any]:
-    try:
-        return veo_imports.connect()
-    except RuntimeError as exc:
-        raise api_error(422, str(exc), "playwright_unavailable") from exc
-    except Exception as exc:
-        raise api_error(422, "Could not open the dedicated browser; check Chromium installation and desktop access.", "veo_connect_failed") from exc
-
-
-@app.delete("/api/veo/session")
-def disconnect_veo() -> dict[str, Any]:
-    try:
-        return veo_imports.disconnect()
-    except ValueError as exc:
-        raise api_error(409, str(exc), "veo_busy") from exc
-    except Exception as exc:
-        raise api_error(409, "Close the Veo browser and retry disconnecting.", "veo_disconnect_failed") from exc
-
-
 @app.post("/api/veo/inspect")
 def inspect_veo(payload: VeoInspectRequest) -> dict[str, Any]:
     try:
@@ -148,7 +139,7 @@ def inspect_veo(payload: VeoInspectRequest) -> dict[str, Any]:
     except ValueError as exc:
         raise api_error(422, str(exc), "veo_inspection_failed") from exc
     except Exception as exc:
-        raise api_error(422, "Inspection failed. Check Playwright/Chromium installation, close the Connect browser, and verify access to this match.", "veo_inspection_failed") from exc
+        raise api_error(422, "Inspection failed. Check Playwright/Chromium installation and verify access to this match.", "veo_inspection_failed") from exc
 
 
 @app.post("/api/veo/import", status_code=202)
@@ -253,7 +244,7 @@ def get_match(match_id: str) -> dict[str, Any]:
 def get_view_context(match_id: str) -> dict:
     match = require_match(match_id)
     with_calibration(match)
-    return view_context(match["calibration"]["path"])
+    return view_context(match["calibration"]["path"], any(item.get("role") == "camera_directions" for item in match.get("media", [])))
 
 
 @app.get("/api/matches/{match_id}/import-job")
@@ -304,6 +295,28 @@ def view_point(payload: ViewPointRequest) -> dict:
         raise api_error(422, str(exc), "invalid_view_point") from exc
 
 
+@app.post("/api/matches/{match_id}/tracking-point")
+def tracking_point(match_id: str, payload: TrackingPointRequest) -> dict[str, Any]:
+    match = require_match(match_id)
+    metadata = with_calibration(match)
+    directions = with_camera_directions(match)
+    try:
+        if payload.x >= payload.width or payload.y >= payload.height:
+            raise ValueError("Tracking pixel lies outside the native video.")
+        point = tracking_ground_for_pixel(metadata, directions, payload.timestamp_s, payload.x, payload.y,
+                                          payload.width, payload.height, tuning=DEFAULT_TRACKING_TUNING)
+        result = point.to_dict()
+        result.update({"pixel_x": payload.x, "pixel_y": payload.y,
+                       "native_source_pixel": {"x": payload.x, "y": payload.y, "width": payload.width, "height": payload.height},
+                       "timestamp_s": payload.timestamp_s, "distance": point.ground_distance_m,
+                       "measured_x": point.world_x, "measured_z": point.world_z, "expected_x": None, "expected_z": None,
+                       "landmark": None, "landmark_name": None, "delta_x": None, "delta_z": None, "field_error_m": None,
+                       "view": "tracking"})
+        return result
+    except ValueError as exc:
+        raise api_error(422, str(exc), "invalid_tracking_point") from exc
+
+
 @app.post("/api/matches/{match_id}/calibration/path")
 @match_file_edit
 def import_calibration_path(match_id: str, payload: PathImportRequest) -> dict[str, Any]:
@@ -348,10 +361,12 @@ def add_media(match_id: str, record: dict[str, Any]) -> dict[str, Any]:
 def import_media_path(match_id: str, payload: PathImportRequest) -> dict[str, Any]:
     require_editable(match_id)
     try:
-        record = media_record(Path(payload.path), source="path")
+        record = media_record(Path(payload.path), source="path", kind="resource" if payload.role == "camera_directions" else None)
         validate_media_role(record, payload.role)
     except (OSError, ValueError) as exc:
         raise api_error(422, str(exc), "invalid_media") from exc
+    if payload.role == "camera_directions":
+        record = {**record, "kind": "resource", "width": 0, "height": 0, "fps": None, "duration_s": None, "name": Path(payload.path).name}
     record["role"] = payload.role if payload.role != "unknown" else record["role"]
     return add_media(match_id, record)
 
@@ -366,9 +381,13 @@ def upload_media(match_id: str, file: Annotated[UploadFile, File(...)], role: An
     destination = store.asset_dir(match_id, "media") / f"{uuid.uuid4().hex[:8]}{suffix}"
     save_upload(file, destination)
     try:
-        record = media_record(destination, name=Path(file.filename).name, source="upload")
-        if role not in {"tracking", "dual_lens", "clip", "image", "unknown"}:
+        record = media_record(destination, name=Path(file.filename).name, source="upload", kind="resource" if role == "camera_directions" else None)
+        if role not in {"tracking", "dual_lens", "camera_directions", "clip", "image", "unknown"}:
             raise ValueError("Unknown media role")
+        if role == "camera_directions":
+            if suffix != ".det":
+                raise ValueError("Camera Directions must be a .det resource.")
+            record.update(kind="resource", width=0, height=0, fps=None, duration_s=None, name=Path(file.filename).name)
         validate_media_role(record, role)
         if role != "unknown":
             record["role"] = role

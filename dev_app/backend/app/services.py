@@ -56,11 +56,13 @@ def infer_media_kind(path: Path) -> str:
         return "image"
     if suffix in VIDEO_EXTENSIONS:
         return "video"
-    raise ValueError("Supported media are JPG, PNG, WebP, MP4, MOV, MKV, AVI, and WebM.")
+    raise ValueError("Supported media are JPG, PNG, WebP, MP4, MOV, MKV, AVI, WebM, and DET resources.")
 
 
 def inspect_media(path: Path, forced_kind: str | None = None) -> dict[str, Any]:
     kind = forced_kind or infer_media_kind(path)
+    if kind == "resource":
+        return {"kind": kind, "width": 0, "height": 0, "fps": None, "duration_s": None}
     if kind in {"image", "frame"}:
         image = cv2.imread(str(path), cv2.IMREAD_COLOR)
         if image is None:
@@ -111,6 +113,10 @@ def save_upload(upload, destination: Path) -> Path:
 
 
 def validate_media_role(media: dict, role: str) -> None:
+    if role == "camera_directions":
+        if media.get("kind") != "resource" or not str(media.get("name", "")).lower().endswith("detections_constrained.det"):
+            raise ValueError("Choose a detections_constrained.det resource for Camera Directions.")
+        return
     if role in {"tracking", "dual_lens", "clip"} and media["kind"] not in {"video", "clip"}:
         raise ValueError("Choose a video for this role.")
     if role == "dual_lens" and (media["width"], media["height"]) != (2048, 2048):

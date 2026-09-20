@@ -14,9 +14,9 @@ contexts: dict = {}
 keys: dict = {}
 
 
-def view_context(calibration_path: str) -> dict:
+def view_context(calibration_path: str, tracking_available: bool = False) -> dict:
     path = Path(calibration_path)
-    key = (str(path.resolve()), path.stat().st_mtime_ns)
+    key = (str(path.resolve()), path.stat().st_mtime_ns, tracking_available)
     if key in keys:
         return keys[key]
     metadata = load_veo_metadata(path)
@@ -45,7 +45,7 @@ def view_context(calibration_path: str) -> dict:
         "fragment_shader": (ROOT / "reference/veo_panoramic.frag.glsl").read_text(),
         "field_length": metadata.field_length, "field_width": metadata.field_width,
         "landmarks": [value.to_dict() for value in field_landmarks(metadata.field_length, metadata.field_width).values()],
-        "tracking_geometry": {"available": False, "reason": "No timestamped virtual-camera pose, FOV/zoom, or encoded-frame crop transform is available. A static calibration cannot map the moving tracking view."},
+        "tracking_geometry": {"available": tracking_available, "reason": "" if tracking_available else "Tracking field projection unavailable: camera directions missing."},
     }
     keys[key] = result
     return result

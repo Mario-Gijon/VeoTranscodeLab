@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 import threading
 import json
 from dataclasses import dataclass, field, fields
@@ -11,7 +10,6 @@ from typing import Any
 
 from ...services import calibration_summary, inspect_media, validate_media_role
 from ...storage import WorkspaceStore
-from .browser import connect, playwright_available
 from .downloader import download_stream
 from .inspector import inspect_match
 from .models import VeoInspection, importable
@@ -46,11 +44,9 @@ class VeoImportService:
     def __init__(self, store: WorkspaceStore, runtime_root: Path) -> None:
         self.store = store
         self.runtime_root = runtime_root
-        self.profile_dir = runtime_root / "veo-profile"
         self.diagnostics_dir = runtime_root / "veo-inspections"
         self._inspections: dict[str, VeoInspection] = {}
         self._jobs: dict[str, ImportJob] = {}
-        self._connect_process = None
         self._lock = threading.RLock()
 
     def active_for_match(self, match_id: str) -> bool:
@@ -59,38 +55,9 @@ class VeoImportService:
     def job_for_match(self, match_id: str) -> ImportJob | None:
         return next((job for job in reversed(list(self._jobs.values())) if job.match_id == match_id), None)
 
-    def session(self) -> dict[str, Any]:
-        status_path = self.profile_dir / "connect-status.json"
-        try:
-            status = json.loads(status_path.read_text()) if status_path.exists() else {}
-        except (OSError, ValueError):
-            status = {}
-        return {"playwright_available": playwright_available(), "profile_exists": self.profile_dir.exists(), "connect_browser_running": bool(self._connect_process and self._connect_process.poll() is None), "error": status.get("error")}
-
-    def connect(self) -> dict[str, Any]:
-        with self._lock:
-            if self._connect_process is None or self._connect_process.poll() is not None:
-                self._connect_process = connect(self.profile_dir)
-        return self.session()
-
-    def disconnect(self) -> dict[str, Any]:
-        with self._lock:
-            if any(job.status in {"queued", "downloading"} for job in self._jobs.values()):
-                raise ValueError("Cancel or finish the active import before disconnecting.")
-            if self._connect_process and self._connect_process.poll() is None:
-                self._connect_process.terminate()
-                self._connect_process.wait(timeout=15)
-            self._connect_process = None
-            if self.profile_dir.exists():
-                shutil.rmtree(self.profile_dir)
-            self._inspections.clear()
-        return self.session()
-
     def inspect(self, match_url: str) -> VeoInspection:
         with self._lock:
-            if self.session()["connect_browser_running"]:
-                raise ValueError("Close the Connect Veo browser after login, then inspect the match.")
-            inspection = inspect_match(match_url, self.profile_dir, self.diagnostics_dir)
+            inspection = inspect_match(match_url, self.diagnostics_dir)
             self._inspections[inspection.identifier] = inspection
         return inspection
 
@@ -98,7 +65,7 @@ class VeoImportService:
         with self._lock:
             if inspection_id not in self._inspections:
                 raise ValueError("Inspection is no longer available. Inspect the match again.")
-            if set(selected_assets) != {"panorama", "ball_tracking", "calibration"}:
+            if not {"panorama", "ball_tracking", "calibration"}.issubset(selected_assets):
                 raise ValueError("Tracking, Dual lens and Calibration must all be resolved before importing.")
             if len(set(selected_assets.values())) != len(selected_assets):
                 raise ValueError("A resource can only have one role in an import.")
@@ -154,12 +121,12 @@ class VeoImportService:
                     raise InterruptedError("Import cancelled.")
                 assert candidate is not None
                 asset = job.assets.setdefault(role, {"status": "waiting", "bytes_downloaded": 0, "bytes_total": None, "filename": candidate.filename})
-                media_role = "dual_lens" if role == "panorama" else "tracking"
+                media_role = "dual_lens" if role == "panorama" else "tracking" if role == "ball_tracking" else "camera_directions"
                 existing = match.get("calibration") if role == "calibration" else next((item for item in match["media"] if item.get("role") == media_role), None)
                 if existing and Path(existing["path"]).is_file():
                     if role == "calibration":
                         calibration_summary(Path(existing["path"]), existing.get("source", "path"))
-                    else:
+                    elif role != "camera_directions":
                         validate_media_role(inspect_media(Path(existing["path"]), "video"), media_role)
                     size = Path(existing["path"]).stat().st_size
                     asset.update(status="complete", bytes_downloaded=size, bytes_total=size)
@@ -171,7 +138,7 @@ class VeoImportService:
                 filename = Path(candidate.filename).name
                 if filename in {"", ".", ".."}:
                     raise ValueError("Invalid asset filename")
-                destination = target_dir / ("camera_alignment.veo" if role == "calibration" else f"{media_role}.mp4")
+                destination = target_dir / ("camera_alignment.veo" if role == "calibration" else "detections_constrained.det" if role == "camera_directions" else f"{media_role}.mp4")
                 # Completed bytes are validated before publication to Match metadata.
                 # A unique staging name also avoids overwriting interrupted runs.
                 staging = destination.with_name(f"{destination.stem}-{self.store.new_id('download')}{destination.suffix}")
@@ -179,6 +146,9 @@ class VeoImportService:
                     download_stream(candidate.url, staging, lambda current, total: self._progress(job, current, total, role), job.cancelled.is_set, candidate.cookies)
                     if role == "calibration":
                         calibration = calibration_summary(staging, "veo_import")
+                    elif role == "camera_directions":
+                        details = {"kind": "resource", "width": 0, "height": 0, "fps": None, "duration_s": None}
+                        validate_media_role({"name": candidate.filename, **details}, media_role)
                     else:
                         details = inspect_media(staging, "video")
                         validate_media_role(details, media_role)

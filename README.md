@@ -138,9 +138,11 @@ dependencies only. There is no runner, model, fake output or unfinished analysis
 
 ### Importing an authorized Veo match
 
-1. Choose **Import from Veo** → **Connect Veo**, sign in in the dedicated browser,
-   then close that browser. A saved session is not proof of current access.
-2. Paste an authorized match URL and choose **Inspect**.
+1. Choose **Import from Veo**, paste an accessible match URL and choose
+   **Inspect**. Inspection uses a fresh unauthenticated Playwright context; no
+   Veo login or persistent browser profile is required.
+2. The inspector closes only known Veo blocking prompts, opens Interactive with
+   the real player button, and waits for the required resources.
 3. The dialog resolves exactly **Tracking**, **Dual lens**, and **Calibration**.
    All three must be found before **Import match** becomes available. If one is
    missing, use **Retry inspection**. No manual role classification is needed.
@@ -162,10 +164,8 @@ Shaders, scripts, fonts and other application assets are not import choices.
 Phases, selectors, evidence, sanitized URLs and screenshots belong in the
 collapsed **Developer diagnostics** section.
 
-The persistent Playwright profile is local to `dev_app/runtime/veo-profile/`.
-Passwords are entered in Veo, not in this app. Signed media URLs and scoped
-cookies remain private in memory; downloads use the original authenticated URLs,
-never redacted diagnostic URLs. Files stream in 1 MiB chunks to partial/staging
+Signed media URLs and scoped cookies remain private in memory; downloads use the
+original observed URLs, never redacted diagnostic URLs. Files stream in 1 MiB chunks to partial/staging
 paths and are published to Match metadata only after download and validation.
 
 Jobs do not survive backend restart: unfinished imports are reported interrupted.

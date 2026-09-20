@@ -12,8 +12,12 @@ def importable(candidate: VeoCandidate) -> bool:
     path = urlsplit(candidate.url).path.lower()
     if candidate.role == "calibration":
         return path.endswith(".veo") and candidate.field_length is not None and candidate.field_width is not None
-    if candidate.role == "panorama" and not (candidate.filename.lower().startswith("transcode-") or (candidate.width, candidate.height) == (2048, 2048)):
+    if candidate.role == "ball_tracking" and not (candidate.filename.lower() == "video.mp4" and "initial" in candidate.discovery_phases):
         return False
+    if candidate.role == "panorama" and not (candidate.filename.lower().startswith("transcode-") and "after_interactive" in candidate.discovery_phases):
+        return False
+    if candidate.role == "camera_directions":
+        return path.endswith("detections_constrained.det")
     return candidate.role in {"ball_tracking", "panorama"} and path.endswith(".mp4")
 
 
@@ -54,10 +58,12 @@ class VeoInspection:
     candidates: list[VeoCandidate] = field(default_factory=list)
     interaction: dict[str, Any] = field(default_factory=dict)
     diagnostic_path: str | None = None
+    access_error: str | None = None
+    manifest: dict[str, Any] = field(default_factory=dict)
 
     def public_dict(self) -> dict[str, Any]:
         resolved = {}
-        for role in ("ball_tracking", "panorama", "calibration"):
+        for role in ("ball_tracking", "panorama", "calibration", "camera_directions"):
             choices = sorted((item for item in self.candidates if item.role == role and importable(item)), key=lambda item: item.confidence, reverse=True)
             if choices:
                 resolved[role] = choices[0].identifier
@@ -68,6 +74,8 @@ class VeoInspection:
             "candidates": [candidate.public_dict() for candidate in self.candidates],
             "interaction": self.interaction,
             "diagnostic_path": self.diagnostic_path,
+            "access_error": self.access_error,
             "resolved_assets": resolved,
-            "ready": len(resolved) == 3,
+            "ready": all(role in resolved for role in ("ball_tracking", "panorama", "calibration")),
+            "manifest": self.manifest,
         }

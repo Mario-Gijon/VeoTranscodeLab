@@ -39,7 +39,10 @@ def classify_resource(
     content = (content_type or "").lower()
     phases = list(dict.fromkeys(discovery_phases or []))
     reasons: list[str] = []
-    score = {"panorama": 0.0, "ball_tracking": 0.0, "calibration": 0.0, "manifest": 0.0}
+    score = {"panorama": 0.0, "ball_tracking": 0.0, "calibration": 0.0, "camera_directions": 0.0, "manifest": 0.0}
+    if name.lower() == "detections_constrained.det" or name.lower().endswith("/detections_constrained.det"):
+        score["camera_directions"] = 1.0
+        reasons.append("Veo constrained camera-directions resource")
     if name.lower().endswith(".veo") or "camera_alignment" in lower:
         score["calibration"] += 0.95; reasons.append("calibration filename/path signal")
     if any(term in lower for term in ("panorama", "pano", "transcode", "dual_lens", "dual-lens")):

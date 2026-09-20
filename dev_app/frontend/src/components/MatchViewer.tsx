@@ -4,17 +4,17 @@ import type { RefObject } from 'react'
 import type { GroundPoint, MediaItem, ViewContext } from '../types'
 import { api } from '../api/client'
 import { createPanoramaGL } from './panoramaGL'
-import { naturalPixel, stackedPixel } from './viewCoordinates'
+import { naturalPixel, nativeVideoPixel, stackedPixel } from './viewCoordinates'
 
 export type ViewMode = 'tracking' | 'panorama' | 'dual_lens'
 interface Props {
   media: MediaItem; mode: ViewMode; crop: string; context: ViewContext | null
   width: number; videoRef: RefObject<HTMLVideoElement | null>; initialTime: number
   onTime: (value: number) => void; onPlayback: (value: boolean) => void
-  points: GroundPoint[]; onClick: (x: number, y: number) => void
+  points: GroundPoint[]; onClick: (x: number, y: number, nativeWidth?: number, nativeHeight?: number) => void; trackingAvailable?: boolean
 }
 
-export default function MatchViewer({ media, mode, crop, context, width, videoRef, initialTime, onTime, onPlayback, points, onClick }: Props) {
+export default function MatchViewer({ media, mode, crop, context, width, videoRef, initialTime, onTime, onPlayback, points, onClick, trackingAvailable }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const magnifier = useRef<HTMLCanvasElement>(null)
   const surface = useRef<HTMLDivElement>(null)
@@ -83,6 +83,14 @@ export default function MatchViewer({ media, mode, crop, context, width, videoRe
     {error && <Alert severity="error">{error} CPU frame rendering remains available.</Alert>}
     <video ref={videoRef} crossOrigin="anonymous" src={sourceUrl} preload="metadata"
       style={{ display: mode === 'tracking' ? 'block' : 'none', width: '100%', maxHeight: '65vh', background: '#080a0c' }}
+      onClick={(event) => {
+        if (mode !== 'tracking' || !trackingAvailable || !videoRef.current || videoRef.current.seeking || videoRef.current.readyState < 2) return
+        videoRef.current.pause()
+        const nativeWidth = videoRef.current.videoWidth || 1920
+        const nativeHeight = videoRef.current.videoHeight || 1080
+        const pixel = nativeVideoPixel(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect(), nativeWidth, nativeHeight)
+        onClick(pixel.x, pixel.y, nativeWidth, nativeHeight)
+      }}
       onLoadedMetadata={(event) => { event.currentTarget.currentTime = Math.min(pausedAt.current, Math.max(0, event.currentTarget.duration - .001)) }}
       onTimeUpdate={(event) => onTime(event.currentTarget.currentTime)}
       onPlay={() => onPlayback(true)} onPause={() => onPlayback(false)} onEnded={() => onPlayback(false)}
@@ -114,6 +122,6 @@ export default function MatchViewer({ media, mode, crop, context, width, videoRe
       </svg>
       <canvas ref={magnifier} width={180} height={180} style={{ display: hover ? 'block' : 'none', position: 'absolute', pointerEvents: 'none', border: '1px solid #eee', width: 180, height: 180 }} />
     </Box>}
-    <Typography variant="caption" color="text.secondary">{mode === 'tracking' ? 'Tracking playback — field mapping requires the missing time-varying virtual-camera transform.' : 'Click pauses playback to measure the displayed pixel. Wheel: magnifier 2×–10×.'}</Typography>
+    <Typography variant="caption" color="text.secondary">{mode === 'tracking' ? (trackingAvailable ? 'Tracking geometry — Experimental. Click to project a native video pixel onto the pitch.' : 'Tracking geometry unavailable: camera directions missing.') : 'Click pauses playback to measure the displayed pixel. Wheel: magnifier 2×–10×.'}</Typography>
   </Box>
 }

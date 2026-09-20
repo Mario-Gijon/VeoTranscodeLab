@@ -1,0 +1,53 @@
+{
+  "match_url": "https://app.veo.co/matches/20260913-real-jaen-vs-hispania-v90ba645/",
+  "assets": {
+    "tracking": "https://c.veocdn.com/fcbb67c0-22a7-4c95-ac8f-f20e1b17cbbe/standard/machine/6281c391/video.mp4",
+    "dual_lens": "https://c.veocdn.com/fcbb67c0-22a7-4c95-ac8f-f20e1b17cbbe/panorama/transcode-69bb54b9-7256-47d7-a4a2-4ae96b075e51.mp4",
+    "calibration": "https://c.veocdn.com/fcbb67c0-22a7-4c95-ac8f-f20e1b17cbbe/panorama/camera_alignment-67a3f0b3-002e-491c-a48c-298f6f0160d1.veo"
+  },
+  "success": true,
+  "events": [
+    {
+      "role": "tracking",
+      "source": "request",
+      "status": null,
+      "url": "https://c.veocdn.com/fcbb67c0-22a7-4c95-ac8f-f20e1b17cbbe/standard/machine/6281c391/video.mp4"
+    },
+    {
+      "role": "tracking",
+      "source": "response",
+      "status": 206,
+      "url": "https://c.veocdn.com/fcbb67c0-22a7-4c95-ac8f-f20e1b17cbbe/standard/machine/6281c391/video.mp4"
+    },
+    {
+      "role": "tracking",
+      "source": "video-element",
+      "status": null,
+      "url": "https://c.veocdn.com/fcbb67c0-22a7-4c95-ac8f-f20e1b17cbbe/standard/machine/6281c391/video.mp4"
+    },
+    {
+      "role": "calibration",
+      "source": "request",
+      "status": null,
+      "url": "https://c.veocdn.com/fcbb67c0-22a7-4c95-ac8f-f20e1b17cbbe/panorama/camera_alignment-67a3f0b3-002e-491c-a48c-298f6f0160d1.veo"
+    },
+    {
+      "role": "calibration",
+      "source": "response",
+      "status": 200,
+      "url": "https://c.veocdn.com/fcbb67c0-22a7-4c95-ac8f-f20e1b17cbbe/panorama/camera_alignment-67a3f0b3-002e-491c-a48c-298f6f0160d1.veo"
+    },
+    {
+      "role": "dual_lens",
+      "source": "request",
+      "status": null,
+      "url": "https://c.veocdn.com/fcbb67c0-22a7-4c95-ac8f-f20e1b17cbbe/panorama/transcode-69bb54b9-7256-47d7-a4a2-4ae96b075e51.mp4"
+    },
+    {
+      "role": "dual_lens",
+      "source": "video-element",
+      "status": null,
+      "url": "https://c.veocdn.com/fcbb67c0-22a7-4c95-ac8f-f20e1b17cbbe/panorama/transcode-69bb54b9-7256-47d7-a4a2-4ae96b075e51.mp4#t=6.27842"
+    }
+  ]
+}

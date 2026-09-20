@@ -5,8 +5,8 @@ import shutil
 
 from dev_app.backend.app import main
 from dev_app.backend.app.importers.veo.classifier import classify_resource, ranked_candidates, sanitize_url
-from dev_app.backend.app.importers.veo.inspector import AFTER_INTERACTIVE_PHASE, INITIAL_PHASE, activate_interactive, dismiss_membership_modal, phase_diagnostics
-from dev_app.backend.app.importers.veo.models import VeoCandidate, VeoInspection
+from dev_app.backend.app.importers.veo.inspector import AFTER_INTERACTIVE_PHASE, INITIAL_PHASE, activate_interactive, camera_directions_for_tracking, dismiss_membership_modal, phase_diagnostics, resource_links, standard_video_camera_directions
+from dev_app.backend.app.importers.veo.models import VeoCandidate, VeoInspection, importable
 from dev_app.backend.app.importers.veo.service import ImportJob, VeoImportService
 from dev_app.backend.app.schemas import VeoInspectRequest
 from dev_app.backend.app.storage import WorkspaceStore
@@ -51,6 +51,34 @@ def test_default_and_interactive_discovery_phases_drive_classification_and_diagn
     assert [item["identifier"] for item in diagnostics["final_classified_assets"]["calibration"]] == ["calibration"]
     assert diagnostics["interactive_activation_confirmed"] is True
     assert "private" not in str(diagnostics)
+
+
+def test_camera_directions_are_taken_from_the_selected_standard_tracking_video():
+    tracking = "https://c.veocdn.com/match/standard/machine/45635d64/video.mp4"
+    directions = "https://c.veocdn.com/match/standard/machine/45635d64/detections_constrained.det"
+    videos = {"videos": [
+        {"url": "https://c.veocdn.com/match/panoramic/video.mp4", "render_type": "panoramic", "camera_directions": "https://c.veocdn.com/other/detections_constrained.det"},
+        {"url": tracking, "render_type": "standard", "camera_directions": directions},
+        {"url": "https://c.veocdn.com/match/standard/machine/other/video.mp4", "render_type": "standard", "camera_directions": None},
+    ]}
+    pairs = standard_video_camera_directions(videos)
+    assert pairs == [(tracking, directions)]
+    resources = {tracking: {"url": tracking, "phases": [INITIAL_PHASE]}}
+    assert camera_directions_for_tracking(resources, [(url, det, INITIAL_PHASE) for url, det in pairs]) == (tracking, directions)
+    # URL availability follows the explicit field; no replacement or render guessing.
+    assert resource_links(videos)[-1] == directions
+
+
+def test_camera_directions_missing_for_selected_tracking_and_direct_network_fallback():
+    tracking = "https://cdn.example/standard/video.mp4"
+    resources = {tracking: {"url": tracking, "phases": [INITIAL_PHASE]}}
+    assert standard_video_camera_directions({"videos": [
+        {"url": tracking, "render_type": "standard", "camera_directions": None},
+    ]}) == []
+    assert camera_directions_for_tracking(resources, []) is None
+    direct = resource_links({"asset": "https://cdn.example/detections_constrained.det?sig=private"})
+    candidate = classify_resource("det", direct[0])
+    assert candidate.role == "camera_directions" and importable(candidate)
 
 
 def test_exact_interactive_player_button_is_preferred_over_text_fallback():

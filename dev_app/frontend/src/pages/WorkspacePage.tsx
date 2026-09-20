@@ -67,12 +67,14 @@ export default function WorkspacePage({ matchId, calibrations, onBack }: Props) 
     const rendered = await api.render(matchId, item.id, width, width * 9 / 16)
     setFrameRender({ ...rendered, timestamp_s: item.timestamp_s }); setStillImage(null); setMode('panorama'); setPoints([])
   }
-  const measure = async (x: number, y: number) => {
-    if (!context || mode === 'tracking') return
+  const measure = async (x: number, y: number, nativeWidth?: number, nativeHeight?: number) => {
+    if (!context) return
     const currentGeneration = generation.current
-    const timestamp = frameRender ? frameRender.timestamp_s : video.current?.currentTime ?? time
+    const timestamp = (frameRender ? frameRender.timestamp_s : video.current?.currentTime) ?? time
     try {
-      const result = frameRender
+      const result = mode === 'tracking'
+        ? await api.trackingPoint(matchId, timestamp, x, y, nativeWidth || 1920, nativeHeight || 1080)
+        : frameRender
         ? await api.groundPoint(frameRender.id, x, y, landmark || null)
         : await api.viewPoint(context.id, mode, x, y, mode === 'dual_lens' ? 2048 : width, mode === 'dual_lens' ? 2048 : width * 9 / 16, landmark || null)
       if (generation.current !== currentGeneration) return
@@ -80,7 +82,7 @@ export default function WorkspacePage({ matchId, calibrations, onBack }: Props) 
     } catch (e) { setError(e instanceof Error ? e.message : 'Measurement failed') }
   }
   if (!match) return <Typography sx={{ p: 3 }}>{error || 'Loading match…'}</Typography>
-  const displayPoints = points.filter((point) => point.view === mode && point.media_id === (frameRender?.id ?? source?.id) && point.view_width === width)
+  const displayPoints = points.filter((point) => point.view === mode && point.media_id === (frameRender?.id ?? source?.id) && (mode === 'tracking' || point.view_width === width))
   return <Box sx={{ p: { xs: 1, md: 2 } }}>
     <Stack direction="row" alignItems="center" gap={2} mb={1}><Button onClick={onBack}>← Library</Button><Typography variant="h6">{match.name}</Typography><Box flex={1} /><Button variant="outlined" size="small" onClick={() => setFilesOpen(true)}>Manage files</Button></Stack>
     {error && <Alert severity="error" onClose={() => setError('')}>{error}</Alert>}{busy && <LinearProgress />}
@@ -93,7 +95,7 @@ export default function WorkspacePage({ matchId, calibrations, onBack }: Props) 
     </Stack>
     <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 7fr) minmax(280px, 3fr)' }, gap: 2 }}>
       <Box minWidth={0}>
-        {stillImage ? <Box><img src={api.url(stillImage.url)} alt={stillImage.name} style={{ width: '100%', maxHeight: '65vh', objectFit: 'contain' }} /><Typography variant="caption">{stillImage.name} · Image preview. Use Render frame for a calibrated stacked frame.</Typography><Button onClick={() => setStillImage(null)}>Return to video</Button></Box> : frameRender ? <PanoramaViewer panorama={frameRender} points={displayPoints} onPixelClick={(x, y) => void measure(x, y)} /> : source && (mode !== 'panorama' || context) ? <MatchViewer key={source.id} media={source} mode={mode} crop={crop} context={context} width={width} initialTime={time} videoRef={video} onTime={setTime} onPlayback={setPlaying} points={displayPoints} onClick={(x, y) => void measure(x, y)} /> : <Alert severity="info">{mode === 'panorama' && !context ? 'Add a calibration to enable panoramic rendering.' : 'Add the source video in Manage files to use this view.'}</Alert>}
+        {stillImage ? <Box><img src={api.url(stillImage.url)} alt={stillImage.name} style={{ width: '100%', maxHeight: '65vh', objectFit: 'contain' }} /><Typography variant="caption">{stillImage.name} · Image preview. Use Render frame for a calibrated stacked frame.</Typography><Button onClick={() => setStillImage(null)}>Return to video</Button></Box> : frameRender ? <PanoramaViewer panorama={frameRender} points={displayPoints} onPixelClick={(x, y) => void measure(x, y)} /> : source && (mode !== 'panorama' || context) ? <MatchViewer key={source.id} media={source} mode={mode} crop={crop} context={context} width={width} initialTime={time} videoRef={video} onTime={setTime} onPlayback={setPlaying} points={displayPoints} trackingAvailable={!!context?.tracking_geometry.available} onClick={(x, y, nativeWidth, nativeHeight) => void measure(x, y, nativeWidth, nativeHeight)} /> : <Alert severity="info">{mode === 'panorama' && !context ? 'Add a calibration to enable panoramic rendering.' : 'Add the source video in Manage files to use this view.'}</Alert>}
         <Stack direction="row" alignItems="center" gap={1} mt={1} flexWrap="wrap">
           <Button disabled={playbackDisabled} onClick={() => { if (video.current?.paused) void video.current.play().catch((e: Error) => setError(e.message)); else video.current?.pause() }}>{playing ? 'Pause' : 'Play'}</Button>
           <Button disabled={playbackDisabled} onClick={() => { video.current?.pause(); seek(time - 1 / (source?.fps || 30)) }}>−1 frame</Button><Button disabled={playbackDisabled} onClick={() => { video.current?.pause(); seek(time + 1 / (source?.fps || 30)) }}>+1 frame</Button>
@@ -103,7 +105,7 @@ export default function WorkspacePage({ matchId, calibrations, onBack }: Props) 
         </Stack><Slider aria-label="Match timeline" value={Math.min(time, duration)} max={duration || 1} step={source?.fps ? 1 / source.fps : .04} disabled={playbackDisabled} onChange={(_, value) => seek(value as number)} />
       </Box>
       <Box minWidth={0}><Typography variant="subtitle1">Pitch</Typography>{context ? <PitchSvg length={context.field_length} width={context.field_width} points={points} /> : <Alert severity="info">Pitch dimensions become available after selecting a calibration.</Alert>}
-        {mode === 'tracking' ? <Alert severity="info" sx={{ mt: 1 }}>Tracking supports playback. Pitch measurements are available in Panorama and Dual lens.</Alert> : <Stack spacing={1} mt={1}><FormControl size="small"><InputLabel shrink>Click mode / landmark</InputLabel><Select displayEmpty renderValue={(value) => value ? context?.landmarks.find((item) => item.id === value)?.name : 'Free point'} label="Click mode / landmark" value={landmark} onChange={(e) => setLandmark(e.target.value)}><MenuItem value="">Free point</MenuItem>{context?.landmarks.map((item) => <MenuItem key={item.id} value={item.id}>{item.name} · {item.x.toFixed(2)}, {item.z.toFixed(2)} m</MenuItem>)}</Select></FormControl><Typography variant="caption">Validation measures calibration error; it does not correct the geometry.</Typography></Stack>}
+        {mode === 'tracking' ? <Alert severity="info" sx={{ mt: 1 }}>Tracking geometry — Experimental{!context?.tracking_geometry.available ? ': camera directions missing.' : '. Click the native video to add a Tracking X/Z marker.'}</Alert> : <Stack spacing={1} mt={1}><FormControl size="small"><InputLabel shrink>Click mode / landmark</InputLabel><Select displayEmpty renderValue={(value) => value ? context?.landmarks.find((item) => item.id === value)?.name : 'Free point'} label="Click mode / landmark" value={landmark} onChange={(e) => setLandmark(e.target.value)}><MenuItem value="">Free point</MenuItem>{context?.landmarks.map((item) => <MenuItem key={item.id} value={item.id}>{item.name} · {item.x.toFixed(2)}, {item.z.toFixed(2)} m</MenuItem>)}</Select></FormControl><Typography variant="caption">Validation measures calibration error; it does not correct the geometry.</Typography></Stack>}
         <Button onClick={() => { setPoints([]); generation.current++ }}>Clear points</Button>
       </Box>
     </Box>{points.length > 0 && <><Divider sx={{ my: 1 }} /><Accordion disableGutters><AccordionSummary>Measurements · {points.length} points</AccordionSummary><AccordionDetails><ValidationTable points={points} /></AccordionDetails></Accordion></>}

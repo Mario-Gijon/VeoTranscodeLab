@@ -54,7 +54,6 @@ dev_app/runtime/
     diagnostics/
     analysis/
     clips/                  # supported category, created only when needed
-  veo-profile/
   veo-inspections/
 ```
 
@@ -217,7 +216,7 @@ npm run build
 
 ## Required manual real-Veo verification
 
-1. Connect Veo, sign in yourself and close the dedicated browser.
+1. Inspect an accessible/public match; the importer uses a clean unauthenticated browser context.
 2. Inspect an authorized match. Verify Tracking resolves video.mp4, Dual lens
    resolves transcode-*.mp4 and Calibration resolves a valid .veo. A missing file
    must disable Import match; use Retry inspection and diagnostics when necessary.

@@ -7,12 +7,14 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request
 
 from .classifier import classify_resource, sanitize_url
+from .discovery import StructuredDiscovery, write_manifest
 from .downloader import authorized_opener, public_url
 from .models import VeoCandidate, VeoInspection
 
@@ -20,13 +22,14 @@ from .models import VeoCandidate, VeoInspection
 INITIAL_PHASE = "initial"
 AFTER_INTERACTIVE_PHASE = "after_interactive"
 MAX_RESOURCES = 100
-INITIAL_CAPTURE_MS = 9_000
-POST_INTERACTIVE_CAPTURE_MS = 9_000
+POST_INTERACTIVE_CAPTURE_MS = 30_000
 ACTIVATION_OBSERVE_MS = 6_000
 INTERACTIVE_LABEL = re.compile(r"^\s*(interactive|interactivo)\s*$", re.IGNORECASE)
 PRIMARY_INTERACTIVE_SELECTOR = "button.interactive-player"
 MEMBERSHIP_MODAL_SELECTOR = "[role='dialog'], dialog, [aria-modal='true']"
 MEMBERSHIP_CLOSE_SELECTOR = 'button[aria-label="x"]'
+LOGIN_MODAL_SELECTOR = ".modal.modal-login-prompt"
+LOGIN_CLOSE_SELECTOR = 'button[aria-label="Close button"]'
 MEMBERSHIP_TEXT = re.compile(r"become\s+a\s+member\s+of|request\s+membership", re.IGNORECASE)
 MENU_LABEL = re.compile(
     r"interactive|interactivo|view|vista|camera|cámara|mode|modo|menu|more|más|options|opciones|"
@@ -44,7 +47,7 @@ def resource_links(value, limit=200) -> list[str]:
             return
         if isinstance(item, str) and item.startswith("https://"):
             path = urlsplit(item).path.lower()
-            if any(term in path for term in (".mp4", ".veo", ".m3u8", ".mpd", "camera_alignment")):
+            if any(term in path for term in (".mp4", ".veo", ".det", ".m3u8", ".mpd", "camera_alignment")):
                 found.append(item)
         elif isinstance(item, dict):
             for child in item.values():
@@ -57,9 +60,82 @@ def resource_links(value, limit=200) -> list[str]:
     return found
 
 
+def standard_video_camera_directions(value) -> list[tuple[str, str]]:
+    """Return explicit camera-directions URLs paired with Standard/Follow videos."""
+    pairs: list[tuple[str, str]] = []
+
+    def visit(item, depth=0):
+        if depth > 12:
+            return
+        if isinstance(item, dict):
+            video_url = item.get("url")
+            directions_url = item.get("camera_directions")
+            render_type = str(item.get("render_type") or item.get("type") or "").strip().lower()
+            if (
+                isinstance(video_url, str)
+                and video_url.startswith("https://")
+                and isinstance(directions_url, str)
+                and directions_url.startswith("https://")
+                and render_type in {"standard", "follow", "follow_camera", "follow-camera"}
+            ):
+                pairs.append((video_url, directions_url))
+            for child in item.values():
+                visit(child, depth + 1)
+        elif isinstance(item, list):
+            for child in item[:500]:
+                visit(child, depth + 1)
+
+    visit(value)
+    return list(dict.fromkeys(pairs))
+
+
+def normalized_resource_url(value: str) -> str:
+    """Compare resource identity without signed query strings or fragments."""
+    return urlunsplit((*urlsplit(value)[:2], urlsplit(value).path, "", ""))
+
+
+def selected_tracking_resource(resources: dict[str, dict[str, object]]) -> str | None:
+    """Match the same initial video.mp4 choice that resolves as Tracking."""
+    eligible = [
+        resource for resource in resources.values()
+        if urlsplit(str(resource["url"])).path.lower().endswith("/video.mp4")
+        and INITIAL_PHASE in resource["phases"]
+    ]
+    return str(eligible[0]["url"]) if eligible else None
+
+
+def camera_directions_for_tracking(resources: dict[str, dict[str, object]], metadata_pairs: list[tuple[str, str, str]]) -> tuple[str, str] | None:
+    """Resolve directions only from metadata attached to the selected Tracking URL."""
+    tracking_url = selected_tracking_resource(resources)
+    if not tracking_url:
+        return None
+    tracking_key = normalized_resource_url(tracking_url)
+    return next(
+        ((video_url, directions_url) for video_url, directions_url, _phase in metadata_pairs
+         if normalized_resource_url(video_url) == tracking_key),
+        None,
+    )
+
+
 def _is_relevant_resource(url: str) -> bool:
     path = urlsplit(url).path.lower()
-    return any(token in path for token in ("transcode-", "video.mp4", "camera_alignment", ".veo", "/panorama/"))
+    return any(token in path for token in ("transcode-", "video.mp4", "camera_alignment", "detections_constrained.det", ".veo", "/panorama/"))
+
+
+def embedded_json_state(page) -> list[object]:
+    """Read explicit JSON script tags only; never dump browser globals."""
+    try:
+        values = page.evaluate("""() => Array.from(document.querySelectorAll('script[type="application/json"], script#__NEXT_DATA__'))
+            .map(node => node.textContent || '').filter(text => text.length > 1 && text.length <= 200000)""")
+    except Exception:
+        return []
+    result = []
+    for value in values[:20]:
+        try:
+            result.append(json.loads(value))
+        except (TypeError, ValueError):
+            continue
+    return result
 
 
 def normalized_match_url(value: str) -> str:
@@ -96,18 +172,74 @@ def probe_media(url: str, cookies: list[dict] | None = None) -> dict:
 def wait_for_player(page) -> bool:
     """Wait for a decodable default player/video before revealing controls."""
     try:
-        videos = page.locator("video")
-        if videos.count() == 0:
-            return False
-        videos.nth(0).wait_for(state="attached", timeout=5_000)
         page.wait_for_function(
             """() => Array.from(document.querySelectorAll('video')).some((video) =>
                 video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0)""",
-            timeout=5_000,
+            timeout=30_000,
         )
         return True
     except Exception:
         return False
+
+
+def _physical_click(page, locator, description: str) -> bool:
+    try:
+        box = locator.bounding_box()
+        if not box:
+            return False
+        x = box["x"] + box["width"] / 2
+        y = box["y"] + box["height"] / 2
+        page.mouse.move(x, y)
+        page.wait_for_timeout(150)
+        page.mouse.down()
+        page.wait_for_timeout(100)
+        page.mouse.up()
+        return True
+    except Exception:
+        return False
+
+
+def dismiss_login_modal(page) -> dict[str, bool]:
+    """Close Veo's logged-out prompt using its stable, scoped close button."""
+    result = {"login_modal_found": False, "login_modal_closed": False, "login_close_button_found": False}
+    try:
+        modals = page.locator(LOGIN_MODAL_SELECTOR)
+        count = min(modals.count(), 10)
+    except Exception:
+        return result
+    for index in range(count):
+        modal = modals.nth(index)
+        try:
+            if not modal.is_visible(timeout=500):
+                continue
+            result["login_modal_found"] = True
+            close = modal.locator(LOGIN_CLOSE_SELECTOR)
+            if close.count() == 0 or not close.nth(0).is_visible(timeout=500):
+                continue
+            result["login_close_button_found"] = True
+            if _physical_click(page, close.nth(0), "login modal close"):
+                modal.wait_for(state="hidden", timeout=5_000)
+                result["login_modal_closed"] = True
+            return result
+        except Exception:
+            continue
+    return result
+
+
+def _surrounding_text(locator) -> str:
+    try:
+        return locator.evaluate("""el => {
+            let node = el, fallback = "";
+            for (let i = 0; node && i < 16; i++, node = node.parentElement) {
+                const text = (node.innerText || '').replace(/\\s+/g, ' ').trim();
+                if (!text) continue;
+                fallback = text;
+                if (/Become a member of|Request membership/i.test(text)) return text.slice(0, 1500);
+            }
+            return fallback.slice(0, 1500);
+        }""") or ""
+    except Exception:
+        return ""
 
 
 def dismiss_membership_modal(page) -> dict[str, bool]:
@@ -121,25 +253,16 @@ def dismiss_membership_modal(page) -> dict[str, bool]:
         dialogs = page.locator(MEMBERSHIP_MODAL_SELECTOR)
         count = min(dialogs.count(), 20)
     except Exception:
-        return result
+        dialogs, count = None, 0
     for index in range(count):
         dialog = dialogs.nth(index)
         try:
-            if not dialog.is_visible(timeout=500):
+            if not dialog.is_visible(timeout=500) or not MEMBERSHIP_TEXT.search(dialog.inner_text(timeout=800) or ""):
                 continue
-            if not MEMBERSHIP_TEXT.search(dialog.inner_text(timeout=800) or ""):
-                continue
-        except Exception:
-            continue
-        result["membership_modal_found"] = True
-        try:
+            result["membership_modal_found"] = True
             close_buttons = dialog.locator(MEMBERSHIP_CLOSE_SELECTOR)
-            close_count = min(close_buttons.count(), 12)
-        except Exception:
-            return result
-        for close_index in range(close_count):
-            close_button = close_buttons.nth(close_index)
-            try:
+            for close_index in range(min(close_buttons.count(), 12)):
+                close_button = close_buttons.nth(close_index)
                 if not close_button.is_visible(timeout=500):
                     continue
                 result["membership_close_button_found"] = True
@@ -147,9 +270,35 @@ def dismiss_membership_modal(page) -> dict[str, bool]:
                 dialog.wait_for(state="hidden", timeout=3_000)
                 result["membership_modal_closed"] = True
                 return result
-            except Exception:
-                continue
+        except Exception:
+            continue
+
+    # Some Veo overlays are not marked as dialogs; only accept an X whose
+    # surrounding DOM contains the membership copy.
+    try:
+        buttons = page.locator(MEMBERSHIP_CLOSE_SELECTOR)
+        count = min(buttons.count(), 20)
+    except Exception:
         return result
+    for index in range(count):
+        close_button = buttons.nth(index)
+        try:
+            if not close_button.is_visible(timeout=500):
+                continue
+            if not MEMBERSHIP_TEXT.search(_surrounding_text(close_button)):
+                continue
+            dialog = close_button.locator("xpath=ancestor::*[self::div or self::section][1]")
+        except Exception:
+            continue
+        result["membership_modal_found"] = True
+        try:
+            result["membership_close_button_found"] = True
+            close_button.click(timeout=2_000)
+            dialog.wait_for(state="hidden", timeout=3_000)
+            result["membership_modal_closed"] = True
+            return result
+        except Exception:
+            continue
     return result
 
 
@@ -380,6 +529,10 @@ def _activate_primary_interactive(page, before_click, restore_after_failure, scr
                 continue
         return visible
 
+    try:
+        locator.nth(0).wait_for(state="visible", timeout=15_000)
+    except Exception:
+        pass
     buttons = visible_buttons()
     if not buttons:
         result["primary_selector_hover_required"] = True
@@ -402,8 +555,8 @@ def _activate_primary_interactive(page, before_click, restore_after_failure, scr
     if before["button"].get("disabled") or before["button"].get("aria_disabled") == "true":
         result["click_method_attempts"].append({"method": "mouse", "attempted": False, "reason": "Interactive button is disabled"})
         return result
-    if hit == "overlaying-element":
-        result["click_method_attempts"].append({"method": "mouse", "attempted": False, "reason": "button center is covered by another element"})
+    if hit not in {"button", "svg-child", "button-child"}:
+        result["click_method_attempts"].append({"method": "mouse", "attempted": False, "reason": f"button center hit {hit}; unrelated element may be covering it"})
     else:
         try:
             box = button.bounding_box()
@@ -416,7 +569,7 @@ def _activate_primary_interactive(page, before_click, restore_after_failure, scr
                 page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
                 page.wait_for_timeout(150)
                 page.mouse.down()
-                page.wait_for_timeout(80)
+                page.wait_for_timeout(100)
                 page.mouse.up()
                 mouse_attempt["click_returned"] = True
             except Exception as exc:
@@ -556,6 +709,9 @@ def phase_diagnostics(candidates: list[VeoCandidate], interaction: dict[str, obj
         "interactive_activation_confirmed": confirmed,
         "activation": {"confirmed": confirmed, "confirmation_reason": confirmation_reason, "method": interaction.get("activation_method")},
         "player_ready": interaction.get("player_ready", False),
+        "login_modal_found": interaction.get("login_modal_found", False),
+        "login_modal_closed": interaction.get("login_modal_closed", False),
+        "login_close_button_found": interaction.get("login_close_button_found", False),
         "membership_modal_found": interaction.get("membership_modal_found", False),
         "membership_modal_closed": interaction.get("membership_modal_closed", False),
         "close_button_found": interaction.get("membership_close_button_found", False),
@@ -601,22 +757,23 @@ def phase_diagnostics(candidates: list[VeoCandidate], interaction: dict[str, obj
             "tracking": final("ball_tracking"),
             "dual_lens": final("panorama"),
             "calibration": final("calibration"),
+            "camera_directions": final("camera_directions"),
         },
     }
 
 
-def inspect_match(match_url: str, profile_dir: Path, diagnostics_dir: Path) -> VeoInspection:
+def inspect_match(match_url: str, diagnostics_dir: Path) -> VeoInspection:
     try:
         from playwright.sync_api import sync_playwright
     except ModuleNotFoundError as exc:
         raise RuntimeError("Playwright is unavailable. Install the backend requirements and run 'playwright install chromium'.") from exc
     target = normalized_match_url(match_url)
     public_url(target)
-    profile_dir.mkdir(parents=True, exist_ok=True)
-    profile_dir.chmod(0o700)
     seen: dict[str, dict[str, object]] = {}
     calibration_details: dict[str, tuple[float, float, object]] = {}
+    metadata_camera_directions: list[tuple[str, str, str]] = []
     metadata: dict[str, str] = {}
+    structured = StructuredDiscovery()
     phase = INITIAL_PHASE
     inspection_identifier = f"inspect_{uuid.uuid4().hex[:12]}"
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
@@ -627,7 +784,7 @@ def inspect_match(match_url: str, profile_dir: Path, diagnostics_dir: Path) -> V
     def record_resource(url: str, content_type: str | None, discovered_phase: str) -> None:
         normalized = urlunsplit((*urlsplit(url)[:4], ""))
         path = urlsplit(normalized).path.lower()
-        if not (path.endswith((".mp4", ".m3u8", ".mpd", ".veo")) or (content_type and content_type.startswith("video/"))):
+        if not (path.endswith((".mp4", ".m3u8", ".mpd", ".veo", ".det")) or (content_type and content_type.startswith("video/"))):
             return
         if normalized not in seen and len(seen) >= MAX_RESOURCES:
             return
@@ -637,8 +794,12 @@ def inspect_match(match_url: str, profile_dir: Path, diagnostics_dir: Path) -> V
         if discovered_phase not in resource["phases"]:
             resource["phases"].append(discovered_phase)
 
-    with sync_playwright() as playwright:
-        context = playwright.chromium.launch_persistent_context(str(profile_dir), headless=True)
+    with sync_playwright() as playwright, tempfile.TemporaryDirectory(prefix="veo-inspection-") as profile_dir:
+        context = playwright.chromium.launch_persistent_context(
+            user_data_dir=profile_dir,
+            headless=False,
+            viewport={"width": 1600, "height": 1000},
+        )
         page = context.pages[0] if context.pages else context.new_page()
 
         def remember(response):
@@ -656,8 +817,11 @@ def inspect_match(match_url: str, profile_dir: Path, diagnostics_dir: Path) -> V
             if content and "json" in content and size.isdigit() and int(size) <= 2_000_000:
                 try:
                     payload = response.json()
+                    structured.observe_json(response.url, payload, phase)
                     for link in resource_links(payload, limit=MAX_RESOURCES):
                         record_resource(link, None, phase)
+                    for video_url, directions_url in standard_video_camera_directions(payload):
+                        metadata_camera_directions.append((video_url, directions_url, phase))
                     if isinstance(payload, dict) and isinstance(payload.get("match"), dict):
                         for key in ("title", "date", "home_team", "away_team"):
                             if isinstance(payload["match"].get(key), str):
@@ -670,8 +834,8 @@ def inspect_match(match_url: str, profile_dir: Path, diagnostics_dir: Path) -> V
                 network_events.append({"kind": "request", "url": sanitize_url(request.url), "method": request.method, "phase": phase})
                 record_resource(request.url, None, phase)
 
-        page.on("response", remember)  # Attached before page/player initialization.
-        page.on("request", remember_request)
+        context.on("response", remember)  # Attached before page/player initialization.
+        context.on("request", remember_request)
         interaction: dict[str, object] = {
             "interactive_control_found": False,
             "interactive_click_succeeded": False,
@@ -683,12 +847,20 @@ def inspect_match(match_url: str, profile_dir: Path, diagnostics_dir: Path) -> V
         }
         try:
             page.goto(target, wait_until="domcontentloaded", timeout=30_000)
-            page.wait_for_timeout(500)
+            page.wait_for_timeout(5_000)
+            interaction.update(dismiss_login_modal(page))
+            page.wait_for_timeout(1_200)
             interaction.update(dismiss_membership_modal(page))
             player_ready = wait_for_player(page)
-            page.wait_for_timeout(INITIAL_CAPTURE_MS)
+            _hover_player(page)
+            interaction.update(dismiss_login_modal(page))
+            interaction.update(dismiss_membership_modal(page))
+            page.wait_for_timeout(500)
+            _hover_player(page)
             metadata.setdefault("title", page.title())
             initial_snapshot = _snapshot_player(page)
+            for embedded in embedded_json_state(page):
+                structured.observe_json(target, embedded, "embedded_state", "embedded_json")
             for raw in initial_snapshot.get("_performance_resources_raw", []):
                 record_resource(raw, None, INITIAL_PHASE)
             for video in initial_snapshot.get("videos", []):
@@ -706,7 +878,8 @@ def inspect_match(match_url: str, profile_dir: Path, diagnostics_dir: Path) -> V
                 nonlocal phase
                 phase = previous_phase
 
-            interaction = activate_interactive(page, start_interactive_phase, restore_phase, screenshot_before, screenshot_after)
+            activation = activate_interactive(page, start_interactive_phase, restore_phase, screenshot_before, screenshot_after)
+            interaction.update(activation)
             interaction["player_ready"] = player_ready
             interaction["network_events"] = network_events[:200]
             interaction["screenshot_before"] = str(screenshot_before) if screenshot_before.exists() else None
@@ -720,7 +893,28 @@ def inspect_match(match_url: str, profile_dir: Path, diagnostics_dir: Path) -> V
                 if normalized not in seen:
                     record_resource(raw, None, AFTER_INTERACTIVE_PHASE)
             if phase == AFTER_INTERACTIVE_PHASE:
-                page.wait_for_timeout(POST_INTERACTIVE_CAPTURE_MS)
+                deadline = time.monotonic() + POST_INTERACTIVE_CAPTURE_MS / 1000
+                while time.monotonic() < deadline:
+                    runtime_urls = page.evaluate("""() => [
+                        ...performance.getEntriesByType('resource').map(entry => entry.name),
+                        ...Array.from(document.querySelectorAll('video, source')).flatMap(node => [node.currentSrc || '', node.src || ''])
+                    ].filter(Boolean)""")
+                    for raw in runtime_urls:
+                        record_resource(raw, None, AFTER_INTERACTIVE_PHASE)
+                    has_transcode = any(
+                        urlsplit(str(item["url"])).path.lower().split("/")[-1].startswith("transcode-")
+                        and str(item["url"]).lower().split("?")[0].endswith(".mp4")
+                        and AFTER_INTERACTIVE_PHASE in item["phases"]
+                        for item in seen.values()
+                    )
+                    has_calibration = any(
+                        urlsplit(str(item["url"])).path.lower().endswith(".veo")
+                        and AFTER_INTERACTIVE_PHASE in item["phases"]
+                        for item in seen.values()
+                    )
+                    if has_transcode and has_calibration:
+                        break
+                    page.wait_for_timeout(250)
             final_snapshot = _snapshot_player(page)
             for raw in final_snapshot.get("_performance_resources_raw", []):
                 if raw not in initial_snapshot.get("_performance_resources_raw", []):
@@ -760,8 +954,29 @@ def inspect_match(match_url: str, profile_dir: Path, diagnostics_dir: Path) -> V
                 except Exception:
                     pass
             cookies = {str(resource["url"]): context.cookies([str(resource["url"])]) for resource in seen.values()}
+            for _video_url, directions_url, _directions_phase in metadata_camera_directions:
+                cookies.setdefault(urlunsplit((*urlsplit(directions_url)[:4], "")), context.cookies([directions_url]))
         finally:
             context.close()
+
+    selected_pair = camera_directions_for_tracking(seen, metadata_camera_directions)
+    selected_tracking_key = normalized_resource_url(selected_pair[0]) if selected_pair else None
+    associated_directions_key = None
+    if selected_pair:
+        video_url, directions_url = selected_pair
+        discovered_phase = next((item_phase for item_video, item_url, item_phase in metadata_camera_directions
+                                 if normalized_resource_url(item_video) == normalized_resource_url(video_url)
+                                 and item_url == directions_url), INITIAL_PHASE)
+        normalized = urlunsplit((*urlsplit(directions_url)[:4], ""))
+        associated_directions_key = normalized_resource_url(normalized)
+        resource = seen.setdefault(normalized, {"url": normalized, "content_type": None, "phases": []})
+        if discovered_phase not in resource["phases"]:
+            resource["phases"].append(discovered_phase)
+        cookies.setdefault(normalized, [])
+    if associated_directions_key:
+        for key, resource in list(seen.items()):
+            if urlsplit(str(resource["url"])).path.lower().endswith(".det") and normalized_resource_url(str(resource["url"])) != associated_directions_key:
+                seen.pop(key)
 
     entries: list[tuple[dict[str, object], VeoCandidate]] = []
     for index, resource in enumerate(seen.values()):
@@ -798,9 +1013,27 @@ def inspect_match(match_url: str, profile_dir: Path, diagnostics_dir: Path) -> V
         metadata=metadata,
         candidates=candidates,
         interaction=phase_diagnostics(candidates, interaction),
+        access_error=(
+            "This Veo match is not accessible without authentication."
+            if not interaction.get("player_ready") and not any(candidate.role == "ball_tracking" for candidate in candidates)
+            else None
+        ),
     )
+    assets = {"tracking": None, "dual_lens": None, "calibration": None, "camera_directions": None}
+    for candidate in candidates:
+        role = {"ball_tracking": "tracking", "panorama": "dual_lens"}.get(candidate.role, candidate.role)
+        if role in assets and assets[role] is None:
+            assets[role] = candidate.public_dict()
+    inspection.manifest = structured.manifest(metadata, assets, {
+        "inspection_id": inspection_identifier,
+        "browser_phases": [INITIAL_PHASE, AFTER_INTERACTIVE_PHASE],
+        "interactive": inspection.interaction.get("activation"),
+        "json_response_count": len(structured.responses),
+        "referenced_resource_count": len(structured.references),
+    })
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
     diagnostic = diagnostics_dir / f"{inspection.identifier}.json"
     inspection.diagnostic_path = str(diagnostic)
     diagnostic.write_text(json.dumps(inspection.public_dict(), indent=2), encoding="utf-8")
+    write_manifest(diagnostics_dir / f"{inspection.identifier}-manifest.json", inspection.manifest)
     return inspection

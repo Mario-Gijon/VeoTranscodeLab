@@ -129,7 +129,7 @@ class WorkspaceStore:
         with self._lock:
             old = []
             def update(item):
-                if record.get("role") in {"tracking", "dual_lens"}:
+                if record.get("role") in {"tracking", "dual_lens", "camera_directions"}:
                     old.extend(value for value in item["media"] if value.get("role") == record["role"] and value["id"] != record["id"])
                 item["media"] = [value for value in item["media"] if value not in old and value["id"] != record["id"]] + [record]
             result = self.update_match(match_id, update)
