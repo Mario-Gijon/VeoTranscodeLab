@@ -6,7 +6,7 @@ import MatchViewer from '../components/MatchViewer'
 import type { ViewerPick, ViewMode } from '../components/MatchViewer'
 import { interactiveGroundPoint } from '../components/interactiveCamera'
 import type { InteractiveCamera } from '../components/interactiveCamera'
-import { appendMeasurement, matchTimestamp, selectedPitchPoints, VIEW_MODES } from '../components/workspaceGeometry'
+import { appendMeasurement, matchTimestamp, selectedPitchPoints, viewLabel, VIEW_MODES } from '../components/workspaceGeometry'
 import PanoramaViewer from '../components/PanoramaViewer'
 import PitchSvg from '../components/PitchSvg'
 import ValidationTable from '../components/ValidationTable'
@@ -102,7 +102,7 @@ export default function WorkspacePage({ matchId, calibrations, onBack }: Props) 
     {error && <Alert severity="error" onClose={() => setError('')}>{error}</Alert>}{busy && <LinearProgress />}
     {filesOpen && <ManageFilesDialog match={match} calibrations={calibrations} onClose={() => setFilesOpen(false)} onUpdated={(result) => { video.current?.pause(); setPlaying(false); setFrameRender(null); setStillImage(null); setMatch(result); generation.current++ }} onImage={(item) => { video.current?.pause(); setPlaying(false); setStillImage(item); setFrameRender(null); setFilesOpen(false) }} onRender={(item) => { setFilesOpen(false); void run(() => renderImage(item)) }} />}
     <Stack direction="row" alignItems="center" flexWrap="wrap" gap={1} mb={1}>
-      <ToggleButtonGroup size="small" exclusive value={mode} onChange={(_, value: ViewMode | null) => value && switchView(value)}>{VIEW_MODES.map((view) => <ToggleButton key={view} value={view}>{view === 'dual_lens' ? 'Dual lens' : view[0].toUpperCase() + view.slice(1)}</ToggleButton>)}</ToggleButtonGroup>
+      <ToggleButtonGroup size="small" exclusive value={mode} onChange={(_, value: ViewMode | null) => value && switchView(value)}>{VIEW_MODES.map((view) => <ToggleButton key={view} value={view}>{viewLabel(view)}</ToggleButton>)}</ToggleButtonGroup>
       <ToggleButton size="small" value="select" selected={selectionEnabled} onChange={() => setSelectionEnabled((value) => !value)}>Select</ToggleButton>
       {highlights && <Button size="small" variant="outlined" onClick={() => setHighlightsOpen(true)}>View Veo highlights</Button>}
       {roleMedia.length > 1 && <Select size="small" value={source?.id ?? ''} displayEmpty onChange={(e) => { video.current?.pause(); setPlaying(false); setSourceId(e.target.value); setFrameRender(null); setStillImage(null); generation.current++ }}><MenuItem value="">No source assigned</MenuItem>{roleMedia.map((item) => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}</Select>}

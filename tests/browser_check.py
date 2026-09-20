@@ -220,7 +220,7 @@ def main():
                     page.get_by_role('button', name='RIGHT', exact=True).click()
                     page.locator('canvas[aria-label="Dual Lens view"]').click(position={'x': 400, 'y': 250})
                     page.get_by_role('button', name='Measurements · 2 points').wait_for()
-                    page.get_by_role('button', name='Tracking', exact=True).click()
+                    page.get_by_role('button', name='Seguimiento de balón', exact=True).click()
                     page.wait_for_function("Math.abs(document.querySelector('video').currentTime-1.2)<0.02 && !document.querySelector('video').seeking && document.querySelector('video').readyState>=2")
                     with page.expect_response('**/tracking-point') as response:
                         page.locator('video').click()

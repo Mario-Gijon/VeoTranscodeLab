@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dragCamera, initialCamera, interactiveGroundPoint, interactiveRay, interactiveShader, isDrag, MAX_FOV, MIN_FOV, PITCH_LIMIT, safeCamera, wheelCamera } from '../src/components/interactiveCamera.ts'
-import { appendMeasurement, canSelect, matchTimestamp, selectedPitchPoints, VIEW_MODES } from '../src/components/workspaceGeometry.ts'
+import { appendMeasurement, canSelect, matchTimestamp, selectedPitchPoints, viewLabel, VIEW_MODES } from '../src/components/workspaceGeometry.ts'
 import { cameraDirectionAtTime, parseCameraDirections, projectTrackingGroundPoint } from '../src/components/trackingOverlay.ts'
 import { projectGroundPoint, interactiveTransform } from '../src/components/interactiveCamera.ts'
 import { nativeVideoPixel } from '../src/components/viewCoordinates.ts'
@@ -16,6 +16,8 @@ const close = (a, b) => assert.ok(Math.abs(a - b) < 1e-10, `${a} != ${b}`)
 
 test('four independent modes retain the media clock, not stale React time', () => {
   assert.deepEqual(VIEW_MODES, ['tracking', 'interactive', 'panorama', 'dual_lens'])
+  assert.equal(viewLabel('tracking'), 'Seguimiento de balón')
+  assert.equal(VIEW_MODES.includes('tracking'), true)
   for (const _mode of VIEW_MODES) close(matchTimestamp({ currentTime: 71.23456 }, 70), 71.23456)
   close(matchTimestamp(null, 71.23456), 71.23456)
 })

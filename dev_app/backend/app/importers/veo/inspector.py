@@ -114,22 +114,23 @@ def standard_follow_videos(value) -> list[tuple[str, str | None]]:
 
 
 def generated_highlights_videos(value) -> list[str]:
-    """Keep a Veo-generated highlights compilation distinct from Tracking."""
+    """Accept only explicit compilation/reel evidence on the video object itself."""
     videos: list[str] = []
 
-    def visit(item, inherited=False, depth=0):
+    def visit(item, depth=0):
         if depth > 12:
             return
         if isinstance(item, dict):
-            marker = inherited or item.get("is_ai_generated") is True or item.get("is_veo_generated") is True or "highlight" in str(item.get("render_type") or item.get("type") or item.get("kind") or "").lower()
+            kind = str(item.get("render_type") or item.get("type") or item.get("kind") or "").lower()
+            marker = item.get("is_highlights_compilation") is True or item.get("is_compilation") is True or item.get("is_reel") is True or kind in {"highlights_compilation", "highlights_reel", "reel"}
             url = item.get("url")
             if marker and isinstance(url, str) and url.startswith("https://") and urlsplit(url).path.lower().endswith(".mp4"):
                 videos.append(url)
             for child in item.values():
-                visit(child, marker, depth + 1)
+                visit(child, depth + 1)
         elif isinstance(item, list):
             for child in item[:500]:
-                visit(child, inherited, depth + 1)
+                visit(child, depth + 1)
 
     visit(value)
     return list(dict.fromkeys(videos))
@@ -140,8 +141,10 @@ def normalized_resource_url(value: str) -> str:
     return urlunsplit((*urlsplit(value)[:2], urlsplit(value).path, "", ""))
 
 
-def selected_tracking_resource(resources: dict[str, dict[str, object]], metadata_videos: list[tuple[str, str | None]] = []) -> str | None:
-    """Prefer explicit Standard/Follow metadata; retain legacy capture fallback."""
+def selected_tracking_resource(resources: dict[str, dict[str, object]], metadata_videos: list[tuple[str, str | None]] = [], initial_player_url: str | None = None) -> str | None:
+    """The visible pre-Interactive player is authoritative; metadata is association-only."""
+    if initial_player_url and initial_player_url.startswith("https://"):
+        return initial_player_url
     if metadata_videos:
         return metadata_videos[0][0]
     eligible = [
@@ -152,9 +155,9 @@ def selected_tracking_resource(resources: dict[str, dict[str, object]], metadata
     return str(eligible[0]["url"]) if eligible else None
 
 
-def camera_directions_for_tracking(resources: dict[str, dict[str, object]], metadata_pairs: list[tuple[str, str, str]], metadata_videos: list[tuple[str, str | None]] = []) -> tuple[str, str] | None:
+def camera_directions_for_tracking(resources: dict[str, dict[str, object]], metadata_pairs: list[tuple[str, str, str]], metadata_videos: list[tuple[str, str | None]] = [], initial_player_url: str | None = None) -> tuple[str, str] | None:
     """Resolve directions only from metadata attached to the selected Tracking URL."""
-    tracking_url = selected_tracking_resource(resources, metadata_videos)
+    tracking_url = selected_tracking_resource(resources, metadata_videos, initial_player_url)
     if not tracking_url:
         return None
     tracking_key = normalized_resource_url(tracking_url)
@@ -517,7 +520,9 @@ def _snapshot_player(page) -> dict[str, object]:
             """() => Array.from(document.querySelectorAll('video')).map((video) => ({
                 currentSrc: video.currentSrc || '', src: video.getAttribute('src') || '',
                 videoWidth: video.videoWidth, videoHeight: video.videoHeight,
-                readyState: video.readyState, paused: video.paused, currentTime: video.currentTime
+                readyState: video.readyState, paused: video.paused, currentTime: video.currentTime,
+                visible: !!(video.offsetWidth || video.offsetHeight || video.getClientRects().length),
+                area: video.clientWidth * video.clientHeight
             }))"""
         )
         snapshot["canvases"] = page.evaluate(
@@ -536,6 +541,15 @@ def _snapshot_player(page) -> dict[str, object]:
     except Exception:
         snapshot["_performance_resources_raw"] = []
     return snapshot
+
+
+def initial_player_video_url(snapshot: dict[str, object]) -> str | None:
+    """Pick the active, decodable default player video, never a hidden clip."""
+    videos = [item for item in snapshot.get("videos", []) if isinstance(item, dict)
+              and item.get("readyState", 0) >= 2 and item.get("videoWidth", 0) > 0
+              and isinstance(item.get("currentSrc"), str) and item["currentSrc"].startswith("https://")]
+    choices = [item for item in videos if item.get("visible")] or videos
+    return str(max(choices, key=lambda item: (float(item.get("area") or 0), not bool(item.get("paused"))))["currentSrc"]) if choices else None
 
 
 def _dom_change_summary(before: dict[str, object], after: dict[str, object]) -> dict[str, object]:
@@ -856,6 +870,7 @@ def inspect_match(match_url: str, diagnostics_dir: Path) -> VeoInspection:
     metadata_camera_directions: list[tuple[str, str, str]] = []
     metadata_tracking_videos: list[tuple[str, str | None]] = []
     metadata_highlights_videos: list[str] = []
+    initial_player_url: str | None = None
     metadata: dict[str, str] = {}
     structured = StructuredDiscovery()
     phase = INITIAL_PHASE
@@ -905,11 +920,12 @@ def inspect_match(match_url: str, diagnostics_dir: Path) -> VeoInspection:
                 structured.observe_json(response.url, payload, phase, status_code=response.status)
                 for link in resource_links(payload, limit=MAX_RESOURCES):
                     record_resource(link, None, phase)
-                for video_url, directions_url in standard_video_camera_directions(payload):
-                    metadata_camera_directions.append((video_url, directions_url, phase))
-                for video_url, directions_url in standard_follow_videos(payload):
-                    metadata_tracking_videos.append((video_url, directions_url))
-                    record_resource(video_url, None, phase)
+                if urlsplit(response.url).path.rstrip("/").lower().endswith("/videos"):
+                    for video_url, directions_url in standard_video_camera_directions(payload):
+                        metadata_camera_directions.append((video_url, directions_url, phase))
+                    for video_url, directions_url in standard_follow_videos(payload):
+                        metadata_tracking_videos.append((video_url, directions_url))
+                        record_resource(video_url, None, phase)
                 for video_url in generated_highlights_videos(payload):
                     metadata_highlights_videos.append(video_url)
                     record_resource(video_url, None, phase)
@@ -948,6 +964,7 @@ def inspect_match(match_url: str, diagnostics_dir: Path) -> VeoInspection:
             _hover_player(page)
             metadata.setdefault("title", page.title())
             initial_snapshot = _snapshot_player(page)
+            initial_player_url = initial_player_video_url(initial_snapshot)
             for embedded in embedded_json_state(page):
                 structured.observe_json(target, embedded, "embedded_state", "embedded_json")
             for raw in initial_snapshot.get("_performance_resources_raw", []):
@@ -1048,8 +1065,8 @@ def inspect_match(match_url: str, diagnostics_dir: Path) -> VeoInspection:
         finally:
             context.close()
 
-    selected_tracking_url = selected_tracking_resource(seen, metadata_tracking_videos)
-    selected_pair = camera_directions_for_tracking(seen, metadata_camera_directions, metadata_tracking_videos)
+    selected_tracking_url = selected_tracking_resource(seen, metadata_tracking_videos, initial_player_url)
+    selected_pair = camera_directions_for_tracking(seen, metadata_camera_directions, metadata_tracking_videos, initial_player_url)
     selected_tracking_key = normalized_resource_url(selected_tracking_url) if selected_tracking_url else None
     associated_directions_key = None
     if selected_pair:
@@ -1102,8 +1119,15 @@ def inspect_match(match_url: str, diagnostics_dir: Path) -> VeoInspection:
         for candidate in candidates:
             if normalized_resource_url(candidate.url) == selected_tracking_key:
                 candidate.role, candidate.confidence = "ball_tracking", 1.0
-                candidate.reasons = ["explicit Standard/Follow video metadata"]
+                candidate.reasons = [
+                    "authoritative initial player video"
+                    if initial_player_url and normalized_resource_url(initial_player_url) == selected_tracking_key
+                    else "explicit Standard/Follow video metadata"
+                ]
                 setattr(candidate, "authoritative", True)
+            elif candidate.role == "ball_tracking":
+                candidate.role, candidate.confidence = "unknown", 0.0
+                candidate.reasons = ["non-authoritative video resource; initial player source selected"]
     highlights_keys = {normalized_resource_url(url) for url in metadata_highlights_videos}
     for candidate in candidates:
         if normalized_resource_url(candidate.url) in highlights_keys and normalized_resource_url(candidate.url) != selected_tracking_key:

@@ -3,6 +3,10 @@ import type { GroundPoint } from '../types'
 export const VIEW_MODES = ['tracking', 'interactive', 'panorama', 'dual_lens'] as const
 export type ViewMode = typeof VIEW_MODES[number]
 
+export function viewLabel(view: ViewMode) {
+  return view === 'tracking' ? 'Seguimiento de balón' : view === 'dual_lens' ? 'Dual lens' : view[0].toUpperCase() + view.slice(1)
+}
+
 /** The media element is the Workspace clock, not React's timeupdate cadence. */
 export function matchTimestamp(video: { currentTime: number } | null, fallback: number) {
   return video && Number.isFinite(video.currentTime) ? video.currentTime : fallback

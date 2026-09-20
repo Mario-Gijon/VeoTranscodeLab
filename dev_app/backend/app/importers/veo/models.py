@@ -12,7 +12,7 @@ def importable(candidate: VeoCandidate) -> bool:
     path = urlsplit(candidate.url).path.lower()
     if candidate.role == "calibration":
         return path.endswith(".veo") and candidate.field_length is not None and candidate.field_width is not None
-    if candidate.role == "ball_tracking" and not (candidate.filename.lower() == "video.mp4" and "initial" in candidate.discovery_phases) and "explicit Standard/Follow video metadata" not in candidate.reasons:
+    if candidate.role == "ball_tracking" and not (candidate.filename.lower() == "video.mp4" and "initial" in candidate.discovery_phases) and not any(reason in candidate.reasons for reason in ("explicit Standard/Follow video metadata", "authoritative initial player video")):
         return False
     if candidate.role == "panorama" and not (candidate.filename.lower().startswith("transcode-") and "after_interactive" in candidate.discovery_phases):
         return False

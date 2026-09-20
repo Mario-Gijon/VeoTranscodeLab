@@ -6,7 +6,7 @@ import json
 
 from dev_app.backend.app import main
 from dev_app.backend.app.importers.veo.classifier import classify_resource, ranked_candidates, sanitize_url
-from dev_app.backend.app.importers.veo.inspector import AFTER_INTERACTIVE_PHASE, INITIAL_PHASE, activate_interactive, bounded_json_response, camera_directions_for_tracking, dismiss_membership_modal, generated_highlights_videos, phase_diagnostics, resource_links, selected_tracking_resource, standard_follow_videos, standard_video_camera_directions
+from dev_app.backend.app.importers.veo.inspector import AFTER_INTERACTIVE_PHASE, INITIAL_PHASE, activate_interactive, bounded_json_response, camera_directions_for_tracking, dismiss_membership_modal, generated_highlights_videos, initial_player_video_url, phase_diagnostics, resource_links, selected_tracking_resource, standard_follow_videos, standard_video_camera_directions
 from dev_app.backend.app.importers.veo.models import VeoCandidate, VeoInspection, importable
 from dev_app.backend.app.importers.veo.service import ImportJob, VeoImportService
 from dev_app.backend.app.schemas import VeoInspectRequest
@@ -82,30 +82,34 @@ def test_structured_standard_video_beats_incidental_video_mp4_and_keeps_its_own_
     assert selected_tracking_resource(resources, structured) == tracking
     assert camera_directions_for_tracking(resources, [(tracking, directions, INITIAL_PHASE)], structured) == (tracking, directions)
     highlight_candidate = classify_resource("highlights", highlights, "video/mp4", discovery_phases=[INITIAL_PHASE])
-    assert highlight_candidate.role == "veo_highlights" and importable(highlight_candidate)
+    assert highlight_candidate.role != "veo_highlights"
 
 
-def test_optional_highlights_coexist_with_required_import_assets(tmp_path, monkeypatch):
-    manager = VeoImportService(WorkspaceStore(tmp_path), tmp_path)
-    candidates = [
-        classify_resource("tracking", "https://cdn.example/video.mp4", discovery_phases=[INITIAL_PHASE]),
-        classify_resource("highlights", "https://cdn.example/highlights.mp4"),
-        classify_resource("panorama", "https://cdn.example/transcode-1.mp4", discovery_phases=[AFTER_INTERACTIVE_PHASE]),
-        classify_resource("calibration", "https://cdn.example/camera_alignment.veo", discovery_phases=[AFTER_INTERACTIVE_PHASE]),
-    ]
-    candidates[3].field_length, candidates[3].field_width = 105, 68
-    inspection = VeoInspection("optional", "https://app.veo.co/matches/x", "https://app.veo.co/matches/x", candidates=candidates)
-    assert "veo_highlights" in inspection.public_dict()["resolved_assets"]
-    manager._inspections[inspection.identifier] = inspection
-    monkeypatch.setattr(manager, "_run_import", lambda _job: None)
-    resolved = inspection.public_dict()["resolved_assets"]
-    job = manager.start_import(inspection.identifier, resolved)
-    assert job.selected_assets["veo_highlights"] == "highlights"
+def test_initial_default_player_current_src_wins_over_nested_and_post_interactive_resources():
+    initial = "https://c.veocdn.com/match/standard/machine/real/video.mp4?sig=initial"
+    nested = "https://c.veocdn.com/match/highlights/standard/video.mp4?sig=clip"
+    after = "https://c.veocdn.com/match/transcode-2048.mp4?sig=after"
+    snapshot = {"videos": [
+        {"currentSrc": nested, "readyState": 4, "videoWidth": 1920, "videoHeight": 1080, "visible": False, "area": 1920 * 1080},
+        {"currentSrc": initial, "readyState": 4, "videoWidth": 1920, "videoHeight": 1080, "visible": True, "area": 1920 * 1080, "paused": False},
+    ]}
+    assert initial_player_video_url(snapshot) == initial
+    resources = {initial: {"url": initial, "phases": [INITIAL_PHASE]}, nested: {"url": nested, "phases": [INITIAL_PHASE]}, after: {"url": after, "phases": [AFTER_INTERACTIVE_PHASE]}}
+    metadata = [(nested, "https://c.veocdn.com/match/highlights/standard/clip.det"), (initial, "https://c.veocdn.com/match/standard/machine/real/detections_constrained.det")]
+    assert selected_tracking_resource(resources, [(nested, None), (initial, None)], initial) == initial
+    assert camera_directions_for_tracking(resources, [(url, det, INITIAL_PHASE) for url, det in metadata], [], initial) == (initial, metadata[1][1])
 
 
 def test_generated_highlights_metadata_detects_a_generic_video_url():
     url = "https://c.veocdn.com/match/generated/video.mp4"
-    assert generated_highlights_videos({"results": [{"is_ai_generated": True, "video": {"url": url}}]}) == [url]
+    assert generated_highlights_videos({"results": [{"is_ai_generated": True, "video": {"url": url}}]}) == []
+
+
+def test_explicit_highlights_compilation_metadata_is_eligible_but_individual_clip_is_not():
+    reel = "https://c.veocdn.com/match/reel/video.mp4"
+    clip = "https://c.veocdn.com/match/clip/video.mp4"
+    payload = {"videos": [{"url": reel, "render_type": "highlights_compilation"}, {"url": clip, "render_type": "standard", "is_ai_generated": True}]}
+    assert generated_highlights_videos(payload) == [reel]
 
 
 def test_camera_directions_missing_for_selected_tracking_and_direct_network_fallback():
