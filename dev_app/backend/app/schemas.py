@@ -58,6 +58,11 @@ class VeoInspectRequest(BaseModel):
 class VeoImportRequest(BaseModel):
     inspection_id: str
     selected_assets: dict[str, str] = Field(default_factory=dict)
+    match_id: str | None = None
+
+
+class RenameMatchRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
 
 
 class ApiError(BaseModel):

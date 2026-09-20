@@ -71,83 +71,111 @@ Open <http://127.0.0.1:5173>; API docs are at
 tool with filesystem-path import, not an authenticated Internet-facing service.
 Do not expose either server to untrusted networks.
 
-### Manual workflow
+### Matches and files
 
-1. In the Match Library, choose **New match**. Assets are optional.
-2. Open **Assets & calibration**. Upload media or reference a local path;
-   assign videos as **Dual lenses**, **Tracking**, or **Clip**. Select/upload
-   the matching `.veo`. Names, dimensions, fps, duration, size, calibration
-   version and field dimensions are shown. Existing media roles are editable.
-3. Switch between **Tracking**, **Panoramic**, and **Dual lenses**. The shared
-   timeline preserves elapsed seconds across views, with play/pause, frame
-   stepping and time entry. Dual lenses offers stacked, LEFT and RIGHT crops.
-4. Panoramic playback supports 1920×1080 and 3840×2160. Click pauses playback
-   and measures the selected pixel. The 180-pixel magnifier samples that same
-   canvas; wheel zoom is 2×–10×. Use Free point or a selected landmark.
-5. The SVG pitch and table show numbered measurements, expected landmarks,
-   connecting error segments, status, deltas and aggregate error statistics.
-   **Clear points** clears these in-memory observations; they are not calibration
-   corrections and are not saved as match assets.
+Choose **New Match**, enter a name, then optionally add files in **Manage files**.
+Upload Tracking, Dual lens, Calibration, clips or images, or expand **Use a local
+file reference** to avoid copying a large local video. Tracking works alone;
+Dual lens + matching .veo enables Panorama. No asset is required to create a match.
 
-Dual-lens video must be 2048×2048. Tracking can be used without calibration;
-panorama and RAW metric clicks need calibration. Images can be previewed, and
-2048×2048 stacked images can use **Render frame**. **Extract frame / CPU render**
-retains the existing Python still-render workflow; it never processes an entire
-match just to play it. Browser codec support may be narrower than OpenCV's
-MP4/MOV/MKV/AVI/WebM support; H.264 MP4 is recommended for playback.
+Library cards show the three primary resources. The menu offers Rename,
+Manage files, Delete match and (for Veo imports) Resume Veo import. Manage files
+supports adding, replacing, removing and changing video roles. Replacing or
+removing an existing file asks for confirmation. Uploads/downloads are managed
+copies; external references are unlinked without deleting their source files.
 
-Tracking click-to-pitch is deliberately disabled: available captures and local
-videos do not supply a validated time-varying virtual-camera pose, FOV and crop.
-See the [tracking investigation](docs/TRACKING_GEOMETRY.md).
+Deleting a match removes its runtime directory, including managed media,
+calibration, extracted frames, cache, diagnostics and analysis artifacts.
+External files and historical `output/` are never deleted. Active imports must
+finish or be cancelled before file changes or deletion.
 
-### Persistence
+### Workspace
 
-Matches live in `dev_app/runtime/matches/<match-id>/match.json`, with sibling
-`calibration/`, `media/`, `frames/`, `cache/` and `diagnostics/` directories
-created as needed. Uploads/downloads preserve original bytes; local paths are
-referenced, not copied. Legacy `runtime/workspaces.json` is migrated once
-without moving assets or deleting the recovery manifest. Refreshing the Library
-reloads match state. Historical `output/` is never used by the app.
+**Tracking | Panorama | Dual lens** share elapsed playback time. The viewer takes
+roughly 70% of a large desktop layout, with the scalable pitch alongside it;
+narrower screens stack. Play/pause, timeline, seconds entry and one-frame steps
+remain available. Source switches pause and preserve time, clamped to the new
+source duration. This does not infer offsets between differently trimmed clips.
+
+- Tracking plays the follow-camera video. Metric clicks remain disabled because
+  its time-varying camera geometry has not been validated.
+- Panorama uses the unchanged captured Veo WebGL shaders with the dual-lens
+  source and calibration; choose 1920×1080 or 3840×2160.
+- Dual lens offers Stacked, LEFT and RIGHT. The source must be 2048×2048.
+
+Panorama and RAW clicks still use Python geometry. Free point, landmarks,
+numbered points, pitch error segments and the 180-pixel cursor magnifier remain.
+The mouse wheel adjusts magnification from 2× to 10×. Measurements live in a
+collapsed section after clicking. They are session-only evaluation points,
+never calibration corrections. Manage files contains image preview and stacked
+frame rendering; the playback toolbar retains extraction / CPU rendering.
+
+### Persistence and analysis foundation
+
+The existing JSON store remains authoritative:
+
+```text
+dev_app/runtime/matches/<match-id>/
+    match.json
+    media/          # imported tracking.mp4 and dual_lens.mp4; uploads
+    calibration/    # imported camera_alignment.veo; uploads
+    clips/          # available for future clip artifacts
+    frames/
+    cache/
+    diagnostics/
+    analysis/
+```
+
+Directories are created as needed; clips currently remain normal media records
+with a clip role. Ownership and logical roles are stored independently of original
+filenames. Matches and completed assets survive restart. Legacy workspaces remain
+compatible. Use one backend worker.
+
+`dev_app/backend/app/analysis_layers.py` defines small stage, run and artifact
+contracts: stage/version, required/produced artifact types, configuration, status,
+Match and source media. Detection, tracking and team-role definitions illustrate
+dependencies only. There is no runner, model, fake output or unfinished analysis UI.
 
 ### Importing an authorized Veo match
 
-The Library's **Import from Veo** flow uses a separate persistent Playwright
-profile at `dev_app/runtime/veo-profile/`; it never reads cookies from Chrome
-or Brave. Install the optional browser support once:
+1. Choose **Import from Veo** → **Connect Veo**, sign in in the dedicated browser,
+   then close that browser. A saved session is not proof of current access.
+2. Paste an authorized match URL and choose **Inspect**.
+3. The dialog resolves exactly **Tracking**, **Dual lens**, and **Calibration**.
+   All three must be found before **Import match** becomes available. If one is
+   missing, use **Retry inspection**. No manual role classification is needed.
+4. Import streams the three files directly to disk. Each file shows Waiting,
+   Downloading, Complete, Failed or Cancelled, transferred bytes and percentage
+   when the server supplies a size. Overall progress is byte-weighted when all
+   sizes are known; otherwise it shows completed-file count and indeterminate
+   activity. Close the dialog to continue in the background; reopen it to monitor.
+5. Open the saved match. For a failed/cancelled import, retry the remaining files,
+   or use **Resume Veo import** from the Library menu. Reinspection refreshes
+   expired signed links and keeps the same Match and completed valid resources.
 
-```bash
-.venv/bin/pip install -r dev_app/backend/requirements.txt
-.venv/bin/playwright install chromium
-```
+Inspection observes the default player first (`video.mp4` → Tracking), then
+activates the actual `button.interactive-player` and continues listening for
+`transcode-*.mp4` and valid `camera_alignment-*.veo` / `.veo` calibration.
+It combines network requests/responses, resource timing, video sources and
+bounded JSON responses. DOM changes alone never confirm successful activation.
+Shaders, scripts, fonts and other application assets are not import choices.
+Phases, selectors, evidence, sanitized URLs and screenshots belong in the
+collapsed **Developer diagnostics** section.
 
-Choose **Connect Veo**, log in yourself in the headed browser, then close that
-browser and paste an authorized Veo match URL into **Import from Veo**. The
-inspection begins network capture before page/player initialization, records the
-default player view, then deliberately opens **Interactive** (also supporting
-**Interactivo**) before it continues capture. Review shows each resource's
-discovery phase alongside evidence/confidence and available metadata: the
-initial `video.mp4` is a strong Tracking candidate, while post-Interactive
-`transcode-*.mp4` and `camera_alignment-*.veo` are strong dual-lens and
-calibration candidates. The inspector first uses the observed semantic
-`button.interactive-player`, hovering the player to reveal it when necessary;
-accessible/text controls and relevant visible menus remain fallbacks. It reports
-selector presence/count/visibility, hover/click use, and whether expected
-post-Interactive traffic confirmed activation.
-Explicitly assign ambiguous videos or leave them skipped. Streaming manifests
-are shown as evidence, not downloaded as fake MP4 files. Metadata inspection can
-fetch bounded file prefixes, but full assets download only after **Import match**.
+The persistent Playwright profile is local to `dev_app/runtime/veo-profile/`.
+Passwords are entered in Veo, not in this app. Signed media URLs and scoped
+cookies remain private in memory; downloads use the original authenticated URLs,
+never redacted diagnostic URLs. Files stream in 1 MiB chunks to partial/staging
+paths and are published to Match metadata only after download and validation.
 
-Downloads stream to the new match's runtime directory. The dialog displays job
-status, current asset, bytes, available progress and cancellation. Completed
-assets survive cancellation/failure. Jobs do not resume after backend restart;
-reinspect expired URLs before retrying. **Disconnect Veo** removes the dedicated
-profile after active work is finished/cancelled. No passwords are requested by
-this app, and normal browser profiles are never read. Cookies and full signed
-URLs stay out of public diagnostics. Profile/session data stays Git-ignored.
+Jobs do not survive backend restart: unfinished imports are reported interrupted.
+Completed assets remain; reinspect to restart the remaining files. Partial files
+are not resumed byte-for-byte. Unknown-length transfers show byte counts, not
+invented percentages. A real authenticated multi-gigabyte Veo import still needs
+manual verification; local checks do not establish live-account success.
 
-Live-account importing is implemented but has not been verified against a real
-authorized session in this task. Lazily requested assets may be absent from an
-inspection. See the [manual integration checklist and engineering report](docs/ENGINEERING_REPORT.md).
+See [engineering report and manual checklist](docs/ENGINEERING_REPORT.md) and
+[tracking geometry investigation](docs/TRACKING_GEOMETRY.md).
 
 ### Validation
 

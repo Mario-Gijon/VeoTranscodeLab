@@ -11,9 +11,10 @@ import os
 import uuid
 from pathlib import Path
 from typing import Annotated, Any
+from functools import wraps
 
 import cv2
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -31,7 +32,7 @@ from .services import (
     validate_media_role,
 )
 from .storage import WorkspaceStore
-from .schemas import MediaRoleRequest, ViewPointRequest
+from .schemas import MediaRoleRequest, ViewPointRequest, RenameMatchRequest
 from .view_geometry import view_context, contexts
 from analysis.raw_ground import raw_pixel_to_ground
 
@@ -95,7 +96,10 @@ def with_calibration(match: dict[str, Any]):
 
 
 def match_summary(match: dict[str, Any]) -> dict[str, Any]:
-    return {**match, "media_count": len(match["media"])}
+    status = match.get("import_status")
+    if status in {"queued", "downloading"} and not veo_imports.active_for_match(match["id"]):
+        status = "interrupted"
+    return {**match, "media_count": len(match["media"]), "import_status": status}
 
 
 def public_media(media: dict[str, Any]) -> dict[str, Any]:
@@ -150,7 +154,7 @@ def inspect_veo(payload: VeoInspectRequest) -> dict[str, Any]:
 @app.post("/api/veo/import", status_code=202)
 def import_veo(payload: VeoImportRequest) -> dict[str, Any]:
     try:
-        return veo_imports.start_import(payload.inspection_id, payload.selected_assets).public_dict()
+        return veo_imports.start_import(payload.inspection_id, payload.selected_assets, payload.match_id).public_dict()
     except ValueError as exc:
         raise api_error(422, str(exc), "veo_import_invalid") from exc
 
@@ -178,6 +182,8 @@ def list_matches() -> list[dict[str, Any]]:
 
 @app.post("/api/matches", status_code=201)
 def create_match(payload: CreateMatchRequest) -> dict[str, Any]:
+    if not payload.name.strip():
+        raise api_error(422, "Enter a match name.", "invalid_name")
     calibration = None
     if payload.calibration_id:
         try:
@@ -185,6 +191,56 @@ def create_match(payload: CreateMatchRequest) -> dict[str, Any]:
         except (OSError, ValueError) as exc:
             raise api_error(422, str(exc), "invalid_calibration") from exc
     return match_summary(store.create_match(payload.name.strip(), payload.description.strip(), calibration))
+
+
+def require_editable(match_id: str) -> dict:
+    match = require_match(match_id)
+    if veo_imports.active_for_match(match_id):
+        raise api_error(409, "Cancel or finish the import before changing match files.", "import_active")
+    return match
+
+
+def match_file_edit(function):
+    """Serialize file changes against import creation and match deletion."""
+    @wraps(function)
+    def guarded(*args, **kwargs):
+        with veo_imports._lock:
+            return function(*args, **kwargs)
+    return guarded
+
+
+@app.patch("/api/matches/{match_id}")
+def rename_match(match_id: str, payload: RenameMatchRequest) -> dict:
+    require_match(match_id)
+    if not payload.name.strip():
+        raise api_error(422, "Enter a match name.", "invalid_name")
+    return match_summary(store.update_match(match_id, lambda item: item.update(name=payload.name.strip())))
+
+
+@app.delete("/api/matches/{match_id}")
+def delete_match(match_id: str) -> dict:
+    with veo_imports._lock:
+        require_editable(match_id)
+        store.delete_match(match_id)
+        for identifier in [key for key, value in render_cache.items() if value["match_id"] == match_id]:
+            render_cache.pop(identifier, None)
+    return {"deleted": True}
+
+
+@app.delete("/api/media/{media_id}")
+def remove_media(media_id: str) -> dict:
+    match, _ = require_media(media_id)
+    with veo_imports._lock:
+        require_editable(match["id"])
+        store.remove_media(match["id"], media_id)
+    return {"removed": True}
+
+
+@app.delete("/api/matches/{match_id}/calibration")
+def remove_calibration(match_id: str) -> dict:
+    with veo_imports._lock:
+        require_editable(match_id)
+        return match_summary(store.set_calibration(match_id, None))
 
 
 @app.get("/api/matches/{match_id}")
@@ -200,16 +256,23 @@ def get_view_context(match_id: str) -> dict:
     return view_context(match["calibration"]["path"])
 
 
+@app.get("/api/matches/{match_id}/import-job")
+def match_import_job(match_id: str) -> dict | None:
+    require_match(match_id)
+    job = veo_imports.job_for_match(match_id)
+    return job.public_dict() if job else None
+
+
 @app.patch("/api/media/{media_id}/role")
+@match_file_edit
 def set_media_role(media_id: str, payload: MediaRoleRequest) -> dict:
     match, media = require_media(media_id)
+    require_editable(match["id"])
     try:
         validate_media_role(media, payload.role)
     except ValueError as exc:
         raise api_error(422, str(exc), "invalid_role") from exc
-    def update(item):
-        next(value for value in item["media"] if value["id"] == media_id)["role"] = payload.role
-    store.update_match(match["id"], update)
+    store.attach_media(match["id"], {**media, "role": payload.role})
     return public_media({**media, "role": payload.role})
 
 
@@ -242,20 +305,23 @@ def view_point(payload: ViewPointRequest) -> dict:
 
 
 @app.post("/api/matches/{match_id}/calibration/path")
+@match_file_edit
 def import_calibration_path(match_id: str, payload: PathImportRequest) -> dict[str, Any]:
+    require_editable(match_id)
     try:
         calibration = validate_calibration_path(payload.path)
     except (OSError, ValueError) as exc:
         raise api_error(422, str(exc), "invalid_calibration") from exc
-    match = store.update_match(match_id, lambda item: item.update(calibration=calibration))
+    match = store.set_calibration(match_id, calibration)
     if match is None:
         raise api_error(404, "Workspace not found.", "match_not_found")
     return match_summary(match)
 
 
 @app.post("/api/matches/{match_id}/calibration/upload")
+@match_file_edit
 def upload_calibration(match_id: str, file: Annotated[UploadFile, File(...)]) -> dict[str, Any]:
-    require_match(match_id)
+    require_editable(match_id)
     if not file.filename or Path(file.filename).suffix.lower() != ".veo":
         raise api_error(422, "Upload a .veo calibration file.", "invalid_calibration")
     destination = store.asset_dir(match_id, "calibration") / f"calibration_{uuid.uuid4().hex[:8]}.veo"
@@ -265,21 +331,22 @@ def upload_calibration(match_id: str, file: Annotated[UploadFile, File(...)]) ->
     except (OSError, ValueError) as exc:
         destination.unlink(missing_ok=True)
         raise api_error(422, f"Could not read the uploaded calibration: {exc}", "invalid_calibration") from exc
-    match = store.update_match(match_id, lambda item: item.update(calibration=calibration))
+    match = store.set_calibration(match_id, calibration)
     return match_summary(match) if match else require_match(match_id)
 
 
 def add_media(match_id: str, record: dict[str, Any]) -> dict[str, Any]:
     record["id"] = store.new_id("media")
-    match = store.update_match(match_id, lambda item: item["media"].append(record))
+    match = store.attach_media(match_id, record)
     if match is None:
         raise api_error(404, "Workspace not found.", "match_not_found")
     return public_media(record)
 
 
 @app.post("/api/matches/{match_id}/media/path", status_code=201)
+@match_file_edit
 def import_media_path(match_id: str, payload: PathImportRequest) -> dict[str, Any]:
-    require_match(match_id)
+    require_editable(match_id)
     try:
         record = media_record(Path(payload.path), source="path")
         validate_media_role(record, payload.role)
@@ -290,8 +357,9 @@ def import_media_path(match_id: str, payload: PathImportRequest) -> dict[str, An
 
 
 @app.post("/api/matches/{match_id}/media/upload", status_code=201)
-def upload_media(match_id: str, file: Annotated[UploadFile, File(...)]) -> dict[str, Any]:
-    require_match(match_id)
+@match_file_edit
+def upload_media(match_id: str, file: Annotated[UploadFile, File(...)], role: Annotated[str, Form()] = "unknown") -> dict[str, Any]:
+    require_editable(match_id)
     if not file.filename:
         raise api_error(422, "Choose a media file to upload.", "invalid_media")
     suffix = Path(file.filename).suffix.lower()
@@ -299,6 +367,11 @@ def upload_media(match_id: str, file: Annotated[UploadFile, File(...)]) -> dict[
     save_upload(file, destination)
     try:
         record = media_record(destination, name=Path(file.filename).name, source="upload")
+        if role not in {"tracking", "dual_lens", "clip", "image", "unknown"}:
+            raise ValueError("Unknown media role")
+        validate_media_role(record, role)
+        if role != "unknown":
+            record["role"] = role
     except (OSError, ValueError) as exc:
         destination.unlink(missing_ok=True)
         raise api_error(422, str(exc), "invalid_media") from exc
@@ -315,8 +388,10 @@ def media_content(media_id: str):
 
 
 @app.post("/api/media/frame", status_code=201)
+@match_file_edit
 def frame_from_video(payload: ExtractFrameRequest) -> dict[str, Any]:
     match, media = require_media(payload.media_id)
+    require_editable(match["id"])
     if media["kind"] not in {"video", "clip"}:
         raise api_error(422, "Frame extraction requires video or clip media.", "not_video")
     destination = store.asset_dir(match["id"], "frames") / f"frame_{uuid.uuid4().hex[:8]}.jpg"
@@ -331,6 +406,7 @@ def frame_from_video(payload: ExtractFrameRequest) -> dict[str, Any]:
 
 
 @app.post("/api/panorama/render", status_code=201)
+@match_file_edit
 def render_panorama(payload: RenderRequest) -> dict[str, Any]:
     match = require_match(payload.match_id)
     media_match, media = require_media(payload.media_id)

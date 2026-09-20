@@ -1,444 +1,247 @@
 # Veo Match Lab — engineering report
 
-## Continuation audit
+## Scope and architecture
 
-The implementation continues the existing FastAPI/React working tree, including
-the pending Veo importer, rather than replacing it with a second application.
-The original renderer, metadata reader, panorama-ground and landmark modules
-were inspected and retained byte-for-byte. Original calibrations, reference
-captures, source frames/MP4s, and historical `output/` were not edited or removed.
-No commit or push was made.
+This iteration evolves the existing FastAPI + React/Vite/TypeScript/MUI app.
+The filesystem Match store and local background importer remain the single
+persistence/job systems. No database, external queue, dependencies, computer
+vision algorithms or deployment were added. No commit or push was made.
 
-The inherited incomplete changes were reviewed for integration and safety, not
-assumed correct because they compiled. Specific issues corrected include:
+The four protected modules are unchanged:
+`analysis/reproduce_veo_panorama.py`, `analysis/veo_metadata.py`,
+`analysis/panorama_ground.py`, `analysis/panorama_landmarks.py`.
+The RAW geometry, captured shaders, WebGL sampling, original media/calibrations
+and historical `output/` also remain unchanged.
 
-- Import job serialization attempted to deep-copy a `threading.Event`; public
-  state now excludes synchronization objects.
-- Import/download failure messages and inspection URLs could disclose signed
-  tokens. All URL query values are redacted, cookies stay private, and network
-  errors exposed to the client are generic. Pydantic errors omit submitted values.
-- Downloads now restrict direct/redirect URLs to public HTTPS, scope cookies
-  using a cookie jar, check content length, refuse overwrites, and preserve a
-  pre-existing `.part` file. Failure removes only this invocation's partial file.
-- Concurrent match updates are locked; legacy metadata is migrated once without
-  moving original assets. Downloaded assets now join normal Match persistence.
-- Manual roles, calibration version reporting, stale Library state, native
-  media Range serving, and import-job polling/review were integrated.
-- Shared seeking and RAW crop coordinates are exercised in Chromium, rather
-  than assuming the three viewers' individual implementations integrate.
-- Real HTTP geometry tests found a NumPy boolean serialization failure missed
-  by direct-handler tests; the new RAW adapter now returns a Python boolean.
-- The previous root-only TypeScript command did not check referenced projects;
-  `typecheck` now uses `tsc -b` and uncovered/fixed actual interface mismatches.
-- Still-image previews disable video controls, frame observations retain their
-  extraction timestamp, stale click replies are ignored after context changes,
-  and both magnifiers use non-passive wheel listeners.
+The initial working tree contained pending Interactive instrumentation in
+inspector.py, the import dialog/types, and importer tests. Those changes were
+reviewed and continued. In particular, DOM-only activation confirmation was
+replaced with useful post-Interactive asset evidence, screenshot paths are now
+passed to activation, and final video/resource snapshots are collected after
+the observation interval.
 
-There is no reliable per-edit model attribution in the working tree; these are
-concrete findings from the continuation audit, not guesses about which model
-authored a particular line.
+## Match lifecycle and ownership
 
-## 1. Architecture
+A Match is created without mandatory files. The next dialog optionally associates
+Tracking, Dual lens, Calibration, clips and images. Upload and local-reference
+paths enter the same store used by Veo imports. Files can later be added, replaced,
+removed or assigned another video role. Replacements are validated before the
+old record/copy is removed. There is one primary Tracking and Dual lens resource;
+clips/images remain collections.
 
-One FastAPI process serves Match metadata, source media, uploads, extracted
-frames, CPU-rendered frames, authoritative geometry, and local import jobs.
-React/Vite/TypeScript/MUI remains the only frontend. Browser-native video drives
-Tracking and RAW views; a WebGL video texture drives Panoramic visualization.
-Python supplies shader uniforms and all metric geometry results.
+New resources record `ownership: managed | external`. Older resources infer
+ownership from their existing source provenance. Calibration has the same rules.
+The JSON store uses atomic replacement and locks. File mutations serialize
+against import creation and deletion; an active import blocks file changes.
 
-Veo-specific code is isolated in `backend/app/importers/veo/`. Existing route,
-schema, media-service and filesystem-store modules are evolved in place. No
-database, queue service, frontend framework replacement or fitting subsystem
-was introduced.
+Match deletion requires a simple dialog, not name re-entry. It recursively removes
+only the validated runtime Match directory, including media, calibration, frames,
+cache, diagnostics and analysis data. Metadata paths are never used as recursive
+delete targets; child symlinks are not followed. External files are unlinked from
+metadata only. Historical output, source MP4s and original .veo files are untouched.
+Deletion is permanent for managed copies; there is no trash/undo function.
 
-## 2. Final repository structure
-
-Generated/ignored directories are abbreviated below; original assets remain.
+The existing layout remains:
 
 ```text
-VeoTranscode/
-├── README.md
-├── .gitignore
-├── analysis/
-│   ├── reproduce_veo_panorama.py     # unchanged validated renderer
-│   ├── veo_metadata.py              # unchanged reader
-│   ├── panorama_ground.py           # unchanged panorama geometry
-│   ├── panorama_landmarks.py        # unchanged landmark references
-│   └── raw_ground.py                # inverse of existing forward sampling
-├── data/                            # both original camera_alignment .veo files
-├── samples/                         # all existing source/calibration frames
-├── reference/
-│   ├── veo_panoramic.vert.glsl
-│   ├── veo_panoramic.frag.glsl
-│   ├── veo_panoramic_uniforms.json
-│   └── veo_panoramic_reference.png
-├── dev_app/
-│   ├── backend/
-│   │   ├── requirements.txt
-│   │   ├── requirements-dev.txt
-│   │   └── app/
-│   │       ├── main.py, schemas.py, services.py, storage.py
-│   │       ├── view_geometry.py
-│   │       └── importers/veo/
-│   │           ├── browser.py, inspector.py, classifier.py
-│   │           └── downloader.py, models.py, service.py
-│   ├── frontend/
-│   │   ├── package.json, package-lock.json, Vite/TS/ESLint configuration
-│   │   ├── src/
-│   │   │   ├── App.tsx, main.tsx, api/client.ts, types/index.ts
-│   │   │   ├── pages/LibraryPage.tsx, WorkspacePage.tsx
-│   │   │   └── components/
-│   │   │       ├── MatchViewer.tsx, panoramaGL.ts, viewCoordinates.ts
-│   │   │       ├── PanoramaViewer.tsx, VeoImportDialog.tsx
-│   │   │       └── PitchSvg.tsx, ValidationTable.tsx
-│   │   └── tests/coordinates.test.mjs
-│   └── runtime/                     # ignored; matches, sessions, diagnostics
-├── docs/ENGINEERING_REPORT.md, TRACKING_GEOMETRY.md
-├── tests/
-│   ├── test_panorama_ground.py, test_panorama_landmarks.py
-│   ├── test_raw_ground.py, test_match_storage.py
-│   ├── test_dev_app_api.py, test_match_api.py
-│   ├── test_veo_importer.py, test_veo_downloads.py
-│   └── browser_check.py
-├── output/                          # ignored, historical evidence preserved
-└── local *.mp4                      # ignored, unchanged
+dev_app/runtime/
+  matches/<match-id>/
+    match.json
+    media/                  # tracking.mp4, dual_lens.mp4, uploads, clips
+    calibration/            # camera_alignment.veo or uploaded calibration
+    frames/
+    cache/
+    diagnostics/
+    analysis/
+    clips/                  # supported category, created only when needed
+  veo-profile/
+  veo-inspections/
 ```
 
-## 3. Match persistence model
+Logical roles do not depend on original filenames. Imported primary files use
+predictable names. Original filenames are retained for display. A store reload
+retains Matches; the legacy migration marker prevents deleted matches from
+being recreated from the old manifest.
 
-`runtime/matches/<match-id>/match.json` is authoritative. Each Match has name,
-description, timestamps, calibration, media records, metadata and a future
-artifacts slot. Media records include stable ID, source provenance, path, role,
-dimensions, timing and size. Subdirectories `calibration`, `media`, `frames`,
-`cache`, `diagnostics` are created as needed. Clips use a media role; no separate
-storage hierarchy is required for playback.
+## Veo discovery and readiness
 
-Writes replace a temporary JSON file atomically and updates use an RLock.
-This is a single-process store, not multi-worker storage. A `.migrated` marker
-prevents repeated legacy imports. `workspaces.json` and its referenced files
-remain intact for recovery. Context/render registries, live observations and
-job state are memory-only; saved matches/assets survive process restart.
+The authorized persistent Chromium session is reused. Inspection captures
+requests and responses before navigation, waits for the default video/player,
+and resolves initial `video.mp4` as Tracking. It then targets
+`button.interactive-player`, hovers when necessary, checks visibility/disabled
+state and center obstruction, and uses a physical pointer click. Accessible/text/menu
+fallbacks remain only when the semantic button is absent; native DOM click is not
+used by the production interaction path.
 
-## 4. Manual import workflow
+Observation combines request/response events, bounded JSON links, resource timing
+and all video currentSrc/src values. Final snapshots are taken after the additional
+post-activation wait. Calibration candidates must parse successfully through the
+existing metadata reader to be importable. A complete MP4 is required for video
+import; dual-lens candidates require the transcode name or 2048×2048 evidence.
 
-Create a Match with any subset of assets. Choose a repository calibration,
-upload `.veo`, or reference a local `.veo` path. Upload media or reference paths;
-choose Tracking, Dual lenses, Clip or Other/image and adjust video roles later.
-OpenCV validates decoding and reports resolution/fps/duration; records show size
-and original filename. Dual-lens roles require 2048×2048.
+For this workflow, a returned click or changing controls/canvases is not success.
+Confirmation requires post-Interactive transcode, clearly identified dual-lens
+media, or a parsed .veo resource. Import readiness separately requires all three
+roles. Backend validation enforces exactly one resource for each role; neither
+JavaScript nor streaming manifests can be submitted as normal downloads.
 
-Referenced local files are not copied; uploads retain original bytes in the
-Match directory. Frame extraction creates a new derived image and records its
-actual decoded frame time/source. Ordinary images preview directly; stacked
-images can use the unchanged CPU panorama renderer. Partial-asset Matches work:
-Tracking requires no calibration, while panorama needs dual source + calibration.
+The normal dialog shows URL, session state and three file rows. Inspection phases,
+selectors, confidence, MIME, redacted URLs, snapshots and screenshot paths are
+only in collapsed Developer diagnostics. No asset IDs are hardcoded. Session
+presence is described as saved, not proof of authentication.
 
-## 5. Veo URL import workflow
+## Download behavior and recovery
 
-Library → Import from Veo → Connect Veo → user login → close Connect browser →
-Inspect authorized HTTPS Veo URL → review candidates → assign/select roles →
-Import match. Nothing selects an ambiguous video silently. The review includes
-filename, inferred role/confidence/evidence, MIME and available dimensions,
-fps/duration/calibration dimensions/version. Manifests remain evidence, not
-downloadable video selections. The job can be cancelled and its partial Match
-opened after completion/failure; Library reload sees imported assets.
+One background thread streams the three selected original authenticated URLs
+using the existing scoped cookie jar. The downloader reads 1 MiB chunks into
+exclusive .part files. Complete transfers are decoded/validated in staging before
+being renamed and published to Match metadata. Entire MP4s are never buffered
+in memory. Public API/diagnostics omit cookies and redact signed URL query values.
 
-Automated tests mock Veo network/session responses. A real-account end-to-end
-import remains a manual integration check, not a claimed successful live test.
+Each role exposes waiting/downloading/complete/failed/cancelled status, bytes and
+known total. HTTP Content-Length or full Content-Range sizes provide estimates
+at inspection; live download sizes take precedence. Overall percentage is
+byte-weighted only when every size is known. Otherwise the UI shows an
+indeterminate bar and completed-file count. No fabricated ETA or percentage.
 
-## 6. Browser/session handling
+On failure or cancellation, valid completed resources remain available. Retry
+keeps the same Match, validates existing resources and skips their download.
+A new inspection can refresh expired URLs. Failed/cancelled status and the last
+summary are persisted. After backend restart, unfinished jobs are shown as
+interrupted; fresh inspection restarts remaining files, not partial byte ranges.
+A hard process exit may leave ignored staging/partial files until match deletion.
 
-Playwright launches a dedicated persistent Chromium profile under ignored
-`runtime/veo-profile/`, mode 0700. Connect is a headed subprocess for normal
-user authentication. No password input exists in the app; normal desktop
-browser profiles are not read. Inspection reuses this profile headlessly only
-after the Connect browser closes. Session state reports browser availability,
-profile presence, running connection and readable launch errors; profile
-presence is not represented as proof of authentication.
+The Library refreshes while open. Background progress can be reopened from
+Import from Veo or a Match's Resume Veo import menu, including after a page reload
+while the backend is alive. Import jobs/credentials themselves remain in memory.
 
-Disconnect blocks during active import, closes the owned process, deletes only
-the dedicated profile and clears retained inspection credentials. Cookies are
-scoped by host/path/secure rules for HTTP fetches and never returned in JSON.
-Full signed URLs are kept only in memory while needed; diagnostics redact all
-query values and fragments. Do not commit runtime data or share browser profiles.
+## Library and workspace
 
-## 7. Asset discovery/classification
+The Library has compact availability cards, New Match, Import from Veo, Open,
+and contextual Rename/Manage files/Delete. A restrained dark palette uses one
+mint accent. File operations live in a reusable dialog, keeping the viewer clear.
 
-The inspector attaches its response listener before navigation/player
-initialization. It first records the default player phase, deliberately opens
-the observed `button.interactive-player` after hovering the player when needed.
-Accessible **Interactive**/**Interactivo** controls and relevant player-menu
-fallbacks remain available, and the post-Interactive phase is recorded. It
-combines that phase evidence with filename/path, MIME, and optional 2048×2048
-probe evidence: initial `video.mp4` strongly indicates Tracking; a
-post-Interactive `transcode-*.mp4` strongly indicates the dual-lens source;
-post-Interactive `camera_alignment-*.veo` strongly indicates calibration.
-Diagnostics explicitly list phase resources, control discovery/click status and
-final Tracking/Dual-lens/Calibration classifications. No IDs/private endpoints
-are guessed.
-Known sample IDs are not embedded in importer logic.
+The workspace uses approximately 70% viewer / 30% pitch on desktop and stacks
+on smaller screens. Tracking, Panorama and Dual lens share elapsed seconds;
+switching source pauses and carries the current timestamp, clamped to duration.
 
-Inspection limits: roughly nine seconds of page observation, 100 resources,
-JSON bodies with declared length ≤2 MB, calibration reads ≤2 MB, and video
-prefix probes ≤8 MiB on up to eight early resource positions. `ffprobe` operates
-on a temporary prefix, so signed URLs never enter its process arguments. A
-trailing MP4 `moov` atom or absent ffprobe leaves metadata unknown. Metadata is
-conservative: only explicit scalar match title/date/team fields are retained.
-Resources requested only after a player mode changes may not be discovered.
+- Tracking: native playback, seeking, duration and nominal frame steps. Metric
+  clicks remain disabled pending validated time-varying camera geometry.
+- Panorama: unchanged WebGL renderer, 1920×1080 or 3840×2160, magnifier, clicks,
+  Free point/landmarks and Python metric results.
+- Dual lens: stacked, LEFT or RIGHT, original RAW coordinate conversion,
+  magnifier and Python metric results.
 
-## 8. Download architecture
+The pitch retains .veo dimensions, numbered/expected/measured points and error
+segments. Measurements are collapsed until wanted. Frame extraction, CPU render,
+image preview and stacked-image rendering are retained in compact controls.
+Measurements remain session-only; no hidden correction or homography was added.
 
-One local daemon worker thread imports at a time. Jobs expose ID, state, current
-asset, bytes/total when known, completed assets, progress, error and Match ID.
-Polling continues using a session-stored job ID while that backend is alive.
-Progress combines completed assets with the active asset fraction; it is not
-an estimate of total download bytes when all sizes are unknown.
+## Future analysis foundation
 
-Downloads stream in 1 MiB chunks through scoped authentication cookies to an
-exclusive `.part`, verify declared size, and rename on success. Only public
-HTTPS direct and redirect URLs are accepted. Complete original files are never
-held in RAM. Cancellation is checked between reads (network timeout 20 s);
-completed files remain. Existing destination/partial files are not overwritten
-or deleted. An abrupt process exit can leave recoverable partials; there is no
-restart-resume engine. No Redis/Celery/external service is required.
+`backend/app/analysis_layers.py` supplies Pydantic contracts for stage definitions,
+stage runs, analysis runs and artifacts. They describe id/version, required and
+produced artifact types, configuration/status, and Match/source-media/run
+ownership. Three illustrative dependency definitions cover person detection,
+person tracking and team/referee role classification. They do not execute.
 
-## 9. Match Library
+Future code can store run manifests/artifacts through the existing analysis
+directory category. There is no workflow engine, CV model, fake output or normal
+frontend exposure of unfinished stages.
 
-The Library lists persisted matches with Tracking, Dual-lens, Calibration and
-Frames/clips availability, New match, Import from Veo and Open workspace.
-Returning from a workspace refreshes server state. Empty/partial Matches are
-valid. Styling is restrained dark MUI without gradients or decorative dashboards.
+## Files changed
 
-## 10. Match Workspace
+- Backend: `main.py`, `schemas.py`, `services.py`, `storage.py`;
+  `importers/veo/inspector.py`, `models.py`, `service.py`.
+- New backend module: `analysis_layers.py`.
+- Frontend: `App.tsx`, `main.tsx`, `api/client.ts`, `types/index.ts`;
+  `pages/LibraryPage.tsx`, `WorkspacePage.tsx`;
+  `components/VeoImportDialog.tsx`.
+- New frontend component: `components/ManageFilesDialog.tsx`.
+- Existing validation: `tests/test_match_api.py` now reflects all-three readiness;
+  `tests/browser_check.py` uses new labels and optional UI screenshots.
+  The pending `tests/test_veo_importer.py` changes were preserved.
+- Documentation: `README.md` and this report.
 
-The main area prioritizes a large media viewer and persistent SVG pitch, using
-roughly 68/32 width on desktop and stacking on smaller screens. There is no
-narrow fixed maximum width on ultrawide displays. Assets/calibration sit in a
-compact accordion. The view toggle, source selector, timeline, diagnostics and
-landmark controls form one workflow. Readable errors and a CPU still-render
-fallback remain available if the browser codec/WebGL cannot display a source.
+## Validation performed
 
-The pitch uses loaded L/W, real aspect ratio and original football markings.
-Blue expected diamonds and numbered measured markers are joined by error
-segments. The table retains pixel/UV, view/time, expected/measured X/Z, deltas,
-Euclidean error and inside/outside/no-ground status. Aggregate diagnostics show
-mean, median, RMS, maximum and signed mean ΔX/ΔZ. They never change calibration.
+- Python compile checks passed.
+- Existing Python suite: 45 passed, one installed Starlette/AnyIO deprecation warning.
+- FastAPI startup, health and OpenAPI passed with isolated runtime storage.
+- Existing Chromium smoke: all three views, shared seek, RAW/panorama clicks,
+  playback and responsive pitch passed.
+- CPU/WebGL comparison remained unchanged on both matches:
+  mean RGB error 0.12847 / 0.09205; 99th percentile 1 / 2.
+- TypeScript typecheck, ESLint, existing coordinate tests and production build passed.
+  Vite reports its existing approximately 551 kB bundle-size advisory.
+- Direct temporary lifecycle smoke passed creation, rename, persisted reload,
+  managed removal, external preservation, import deletion guard and match deletion.
+- Direct temporary importer smoke passed three-role resolution, JS exclusion,
+  DOM-only activation rejection, byte-weighted progress, simulated download failure,
+  same-Match retry and skipping the completed Tracking download.
+- Library, workspace and Manage files screenshots were captured for local visual review.
+- `git diff --check` passed; protected geometry/shader files have no diff.
 
-## 11. Shared playback/timeline
+No large new test suite was added. Local importer checks use simulated resource
+access and do not establish successful authenticated Veo discovery or multi-GB transfer.
 
-Workspace owns one elapsed-seconds timestamp. Panoramic/RAW modes keep the same
-video element; switching to another source mounts its video at the common time,
-clamped to its duration. Source switches pause; timeline has play/pause, numeric
-time, seek slider and ±1 frame using fps when available. Native time events
-update state without pushing per-frame React seek loops. Clicks pause before
-measurement, and clicks during an unfinished seek are rejected.
+## Run commands
 
-This is approximate shared elapsed time, not proven synchronization of unrelated
-files. Clip offsets are not inferred. Frame stepping uses nominal fps and browser
-seeking, not a frame-accurate NLE or variable-frame-rate indexing engine.
-
-## 12. Tracking viewer
-
-Normal HTML video playback, HTTP Range support and the shared timeline. Tracking
-can play without geometry. Metric clicks are disabled with the explicit missing
-time-varying-camera explanation; the API cannot be asked to approximate them.
-
-## 13. Dual-lens viewer
-
-The original 2048×2048 video is decoded once and drawn as stacked or exact
-2048×1024 LEFT/RIGHT crops. LEFT is top, RIGHT is bottom. A RIGHT crop click adds
-1024 to natural y before calling Python. No resampling is written to disk and
-the source video is unchanged. Magnifier and markers share these coordinates.
-
-## 14. Panoramic/WebGL viewer
-
-The actual captured vertex and fragment files are delivered unchanged to
-WebGL1. Python computes the uniforms from metadata, including the validated
-inverse `camera2presentation`, and column-major matrix serialization. Native
-HTML video frames become the stacked texture; LINEAR/CLAMP sampling and the
-source-y convention follow the captured shader. Watermark texture is transparent
-for the geometry comparison. The renderer is not rebuilt on measurement clicks;
-video texture updates occur only when decoded playback time changes.
-
-CPU/WebGL pixel comparisons used identical decoded sample pixels supplied as
-PNG, at 640×360 with Chromium/SwiftShader:
-
-| Calibration | Mean absolute RGB difference (0–255) | 99th percentile |
-| --- | ---: | ---: |
-| `67a3f0b3…` / match 1 | 0.128469 | 1.0 |
-| `d07ae0aa…` / match 2 | 0.092054 | 2.0 |
-
-This validates the shader integration on both samples, not performance on every
-GPU or every frame of a match. Native 1920 preview playback/seek was exercised;
-3840×2160 is supported but its sustained frame rate depends on the local GPU.
-The unchanged CPU renderer remains a still-frame baseline.
-
-## 15. Panorama click → pitch
-
-Browser CSS coordinates are explicitly floored/clamped to canvas natural
-pixels. Python's existing helper uses pixel-center UV, the captured panorama
-angular bounds, the effective camera transform, and Y=0 ground intersection.
-No camera math moved to frontend hit testing.
-
-The 180×180 magnifier samples the same rendered canvas/image centered at
-`(x+0.5, y+0.5)`; its crosshair and request therefore reference the same texel at
-any responsive scale. Wheel zoom is 2×–10× with scrolling prevented only over
-the viewer. It does not intercept clicks. Numbered markers survive multiple
-measurements; stale async replies are discarded after clearing/changing context.
-
-## 16. RAW dual-lens click → pitch
-
-`analysis/raw_ground.py` reverses the existing source sampling: stacked texel
-center → lens selection → inverse piecewise vertical source compression →
-3840×2160 calibration pixel → inversion of the canonical rational distortion
-function → calibrated lens ray → `camera2world @ lens2camera` → Y=0 intersection.
-The optical lens-origin translation is retained. Damped Newton iteration solves
-the existing forward model with a checked calibration-pixel residual; it is not
-parameter fitting or a new calibration. Nonconvergence is a readable error.
-
-Tests round-trip known field landmarks through the original forward projector
-for both lenses of both matches (tolerance 0.00006 m including float32 forward
-map precision), and compare panorama ground points projected into RAW and
-inverted (0.0001 m tolerance). These are numerical consistency checks, not a
-claim of submillimetre physical accuracy from manual clicks.
-
-## 17. Tracking click → pitch findings
-
-See [TRACKING_GEOMETRY.md](TRACKING_GEOMETRY.md) for probes and missing evidence.
-The available static `.veo` transforms and Panoramic shader captures do not give
-the tracking video's time-indexed virtual-camera pose, FOV/zoom/crop or timebase.
-Local encoded videos have no discovered camera-data stream. No authenticated
-network investigation was possible without a user session. The correct current
-state is working playback with disabled metric clicks, not a fabricated map.
-
-## 18. Tests and validation
-
-- Python compilation: all source files under `analysis`, backend and `tests`.
-- Full pytest: geometry/landmarks, both-match RAW inversion, migration/concurrent
-  persistence, manual imports, Range serving, classification/redaction,
-  download integrity/cookie scope/cancellation, job serialization, real HTTP
-  API and mocked Veo routes. Existing tests retained.
-- Chromium check: isolated FastAPI startup/health/OpenAPI, two-match CPU/WebGL
-  comparison, Library/roles, shared 1.2-second seek across all views, RIGHT RAW
-  and panorama clicks, playback, responsive pitch and no page exceptions.
-- Frontend: actual TypeScript project build-check, zero-warning lint, focused
-  responsive coordinate/crop tests, production build.
-- `git diff --check`; no diff in the four protected modules or original assets.
-
-Final run: compilation passed; **44 pytest tests passed**; FastAPI startup and
-OpenAPI passed; Chromium parity/workflow passed; TypeScript, lint, coordinate
-assertions and production build passed; tracked and new-file whitespace checks
-passed. SHA-256 verification and Git diff confirm all four protected modules
-are unchanged. Non-fatal tooling warnings: installed Starlette/AnyIO deprecation
-and Vite's approximately 548 kB main-chunk advisory. No live Veo credentials or
-servers are required by tests.
-
-### Authorized live-account manual integration checklist
-
-1. Run both servers locally. Install Playwright Chromium, with a working desktop
-   display for Connect. Keep runtime private and Git-ignored.
-2. Connect, authenticate yourself, close Chromium, reopen/reuse Connect to verify
-   the dedicated session persists. Never paste passwords into this app.
-3. Inspect a permitted match URL. Check listed resource evidence against the
-   browser's player, especially 2048×2048 dual source versus tracking. Missing
-   metadata must show unknown, and ambiguous videos must require selection.
-4. Review/select `.veo`, dual source and tracking if available. Start import;
-   observe bytes/status without buffering full files. Cancel one large import:
-   current partial should be removed, completed assets should remain usable.
-5. Reinspect and import successfully. Verify calibration dimensions/version,
-   media metadata, Library badges and persisted Match JSON after restart.
-6. Scrub/switch Tracking, LEFT, RIGHT and Panoramic at several timestamps.
-   Compare a CPU still to WebGL, and measure visible known landmarks in RAW and
-   panorama. Do not interpret Tracking playback as supported ground mapping.
-7. Inspect saved diagnostics for redacted query values and no cookies/headers.
-   Expired/inaccessible resources must fail readably with completed files kept.
-8. Disconnect when no job is active; verify dedicated profile removal and no
-   change to the user's regular browser profile or original assets.
-
-## 19. Dependencies
-
-Backend keeps FastAPI, Uvicorn and python-multipart. Playwright provides the
-authorized browser session; NumPy/OpenCV are declared explicitly for the existing
-renderer/media adapters. Development requirements add pytest and httpx2 for the
-installed Starlette TestClient path. The local Chromium integration test uses
-system ffmpeg; optional ffprobe enriches bounded inspection metadata. Browser
-installation is separate from pip dependencies.
-
-No new npm library, database, broker or frontend test framework was introduced.
-Node's built-in test runner/type stripping runs the coordinate assertions.
-
-## 20. Exact commands
-
-From the repository root (create `.venv` only if absent):
+From the repository root, using the existing environment:
 
 ```bash
-python -m venv .venv
-.venv/bin/pip install -r dev_app/backend/requirements-dev.txt
-.venv/bin/playwright install chromium
 .venv/bin/uvicorn dev_app.backend.app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Second terminal:
+In another terminal:
 
 ```bash
 cd dev_app/frontend
-npm ci
 npm run dev -- --host 127.0.0.1
 ```
 
-Open `http://127.0.0.1:5173`. Use one backend process/worker. For custom origins
-set `VITE_API_BASE_URL` and backend `VEO_FRONTEND_ORIGINS` explicitly; tests use
-an isolated `VEO_RUNTIME_ROOT`. Defaults remain the normal local runtime.
-
-Validation from root:
+Open http://127.0.0.1:5173. First-time dependency/browser setup remains in README.
+Use one backend worker and keep the app local. Existing checks:
 
 ```bash
 .venv/bin/python -m compileall -q analysis dev_app/backend tests
 .venv/bin/python -m pytest -q
 .venv/bin/python tests/browser_check.py
 git diff --check
-```
-
-Validation from `dev_app/frontend`:
-
-```bash
+cd dev_app/frontend
 npm run typecheck
 npm run lint
 npm test
 npm run build
 ```
 
-The browser check uses temporary storage and localhost ports 8005/5175; leave
-those ports free. It requires the repository samples/calibrations and ffmpeg.
-The original CLI renderer commands for both matches remain in README.
+## Required manual real-Veo verification
 
-## 21. Known limitations
+1. Connect Veo, sign in yourself and close the dedicated browser.
+2. Inspect an authorized match. Verify Tracking resolves video.mp4, Dual lens
+   resolves transcode-*.mp4 and Calibration resolves a valid .veo. A missing file
+   must disable Import match; use Retry inspection and diagnostics when necessary.
+3. Import and observe per-file transferred bytes/percentages over real large
+   downloads. Cancel or interrupt once; confirm completed files remain and a
+   retry fills only missing resources in the same Match.
+4. Open the Match and seek/switch all three views at several times. Check
+   LEFT/RIGHT crops, magnification, a landmark click and the 2D pitch.
+5. Restart both servers. Confirm the Match still opens; an interrupted import
+   should require reinspection, not appear Ready.
+6. Exercise rename, managed replacement and reference removal. Delete a disposable
+   Match and verify its managed directory disappears while the originals and
+   historical output remain intact.
 
-- Real authenticated Veo discovery/download is not live-verified. Bounded browser
-  observation can still miss lazy resources or JSON without Content-Length; unfamiliar
-  API/header-based authorization may require a future observed integration.
-- Manifests are not assembled into downloads; only discovered complete files
-  are supported. Unknown metadata is not invented.
-- Jobs/inspection/context IDs do not survive backend restart. Imported assets
-  and Match JSON do. There is no cross-process lock or automatic job resume.
-- Metric observations are in-memory, not a durable analysis export yet.
-- Native playback depends on codec/GPU support; 4K performance is not benchmarked.
-  WebGL uses preserved drawing buffers for precision inspection.
-- Common elapsed seconds do not automatically align trimmed clips or different
-  encodings. Browser frame stepping is not a frame-accurate editing system.
-- RAW inverse behavior outside convergent usable lens regions returns an error;
-  tested numerical round trips do not replace physical calibration validation.
-- Tracking ground mapping remains disabled pending the missing trajectory.
-- This is a trusted single-user localhost tool, not a hardened public service.
-  It intentionally supports local filesystem paths and persistent credentials;
-  do not expose it remotely. URL checks are defense in depth, not a replacement
-  for a network sandbox against hostile pages/DNS behavior.
+## Remaining limitations
 
-## 22. Recommended next step
+Real authenticated Veo discovery and multi-gigabyte downloads were not exercised
+in this environment. Lazy resources, expired authorization, profile locks or a
+future player DOM change can still require investigation. The bounded inspector
+does not invent endpoints or implement streaming-manifest assembly.
 
-Run the documented authorized real-match import checklist, then capture and
-validate time-indexed Interactive/follow-camera metadata. Preserve the current
-two-match renderer/RAW numerical baselines while investigating that evidence.
-Only after exact tracking geometry is demonstrated should Tracking metric clicks
-be enabled. Player detection, identity, tracking, tactical analytics and fitting
-remain explicitly out of scope.
+Jobs and signed credentials are not durable; there is no byte-range resumption
+after failure/restart. No multi-worker coordination exists. Unknown-size streams
+can only report transferred bytes. Common timestamps do not align trimmed media
+automatically, and frame stepping uses nominal fps/browser seeking. Playback
+depends on browser codecs/GPU. Tracking metric geometry and all CV algorithms
+remain intentionally unavailable.

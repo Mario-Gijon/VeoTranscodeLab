@@ -22,8 +22,12 @@ AFTER_INTERACTIVE_PHASE = "after_interactive"
 MAX_RESOURCES = 100
 INITIAL_CAPTURE_MS = 9_000
 POST_INTERACTIVE_CAPTURE_MS = 9_000
+ACTIVATION_OBSERVE_MS = 6_000
 INTERACTIVE_LABEL = re.compile(r"^\s*(interactive|interactivo)\s*$", re.IGNORECASE)
 PRIMARY_INTERACTIVE_SELECTOR = "button.interactive-player"
+MEMBERSHIP_MODAL_SELECTOR = "[role='dialog'], dialog, [aria-modal='true']"
+MEMBERSHIP_CLOSE_SELECTOR = 'button[aria-label="x"]'
+MEMBERSHIP_TEXT = re.compile(r"become\s+a\s+member\s+of|request\s+membership", re.IGNORECASE)
 MENU_LABEL = re.compile(
     r"interactive|interactivo|view|vista|camera|cámara|mode|modo|menu|more|más|options|opciones|"
     r"standard|estándar|panoramic|panorámica|tracking|seguimiento",
@@ -51,6 +55,11 @@ def resource_links(value, limit=200) -> list[str]:
 
     visit(value)
     return found
+
+
+def _is_relevant_resource(url: str) -> bool:
+    path = urlsplit(url).path.lower()
+    return any(token in path for token in ("transcode-", "video.mp4", "camera_alignment", ".veo", "/panorama/"))
 
 
 def normalized_match_url(value: str) -> str:
@@ -85,16 +94,63 @@ def probe_media(url: str, cookies: list[dict] | None = None) -> dict:
 
 
 def wait_for_player(page) -> bool:
-    """Wait briefly for the default player/video before revealing its controls."""
+    """Wait for a decodable default player/video before revealing controls."""
     try:
         videos = page.locator("video")
         if videos.count() == 0:
             return False
         videos.nth(0).wait_for(state="attached", timeout=5_000)
-        page.wait_for_timeout(300)
+        page.wait_for_function(
+            """() => Array.from(document.querySelectorAll('video')).some((video) =>
+                video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0)""",
+            timeout=5_000,
+        )
         return True
     except Exception:
         return False
+
+
+def dismiss_membership_modal(page) -> dict[str, bool]:
+    """Close only the visible membership dialog, never a page-level X button."""
+    result = {
+        "membership_modal_found": False,
+        "membership_modal_closed": False,
+        "membership_close_button_found": False,
+    }
+    try:
+        dialogs = page.locator(MEMBERSHIP_MODAL_SELECTOR)
+        count = min(dialogs.count(), 20)
+    except Exception:
+        return result
+    for index in range(count):
+        dialog = dialogs.nth(index)
+        try:
+            if not dialog.is_visible(timeout=500):
+                continue
+            if not MEMBERSHIP_TEXT.search(dialog.inner_text(timeout=800) or ""):
+                continue
+        except Exception:
+            continue
+        result["membership_modal_found"] = True
+        try:
+            close_buttons = dialog.locator(MEMBERSHIP_CLOSE_SELECTOR)
+            close_count = min(close_buttons.count(), 12)
+        except Exception:
+            return result
+        for close_index in range(close_count):
+            close_button = close_buttons.nth(close_index)
+            try:
+                if not close_button.is_visible(timeout=500):
+                    continue
+                result["membership_close_button_found"] = True
+                close_button.click(timeout=2_000)
+                dialog.wait_for(state="hidden", timeout=3_000)
+                result["membership_modal_closed"] = True
+                return result
+            except Exception:
+                continue
+        return result
+    return result
 
 
 def _hover_player(page) -> bool:
@@ -109,23 +165,6 @@ def _hover_player(page) -> bool:
         except Exception:
             continue
     return False
-
-
-def _unobstructed(button) -> bool:
-    """Allow a force click only when the real button owns its center pixel."""
-    try:
-        box = button.bounding_box()
-        if not box:
-            return False
-        return bool(button.evaluate(
-            """(element, point) => {
-                const top = document.elementFromPoint(point.x, point.y);
-                return Boolean(top && (top === element || element.contains(top)));
-            }""",
-            {"x": box["x"] + box["width"] / 2, "y": box["y"] + box["height"] / 2},
-        ))
-    except Exception:
-        return False
 
 
 def _click_first_visible(locator, attempt: str, attempts: list[str], before_click, restore_after_failure) -> tuple[bool, bool]:
@@ -166,8 +205,146 @@ def _control_label(control) -> str:
         return ""
 
 
-def _activate_primary_interactive(page, before_click, restore_after_failure) -> dict[str, object]:
-    """Use the observed Veo semantic button before any text/accessibility fallback."""
+def _snapshot_player(page) -> dict[str, object]:
+    """Capture player state; _safe_snapshot strips private URLs before publication."""
+    snapshot: dict[str, object] = {
+        "button": {
+            "found": False,
+            "count": 0,
+            "visible": False,
+            "enabled": False,
+            "disabled": None,
+            "aria_disabled": None,
+            "class_name": None,
+            "bbox": None,
+            "display": None,
+            "visibility": None,
+            "opacity": None,
+            "pointer_events": None,
+            "element_at_center": "not-found",
+        },
+        "videos": [],
+        "canvases": [],
+        "performance_resources": [],
+        "relevant_resources": [],
+        "dom": {},
+    }
+    try:
+        locator = page.locator(PRIMARY_INTERACTIVE_SELECTOR)
+        count = locator.count()
+        snapshot["button"]["count"] = count
+        snapshot["button"]["found"] = count > 0
+        if count:
+            button = locator.nth(0)
+            box = button.bounding_box()
+            computed = button.evaluate(
+                """(element, point) => {
+                    const style = getComputedStyle(element);
+                    const top = point ? document.elementFromPoint(point.x, point.y) : null;
+                    let hit = 'none';
+                    if (top === element) hit = 'button';
+                    else if (top && element.contains(top) && top.tagName === 'svg') hit = 'svg-child';
+                    else if (top && element.contains(top)) hit = 'button-child';
+                    else if (top) hit = 'overlaying-element';
+                    const player = element.closest('[class*="player"], [data-testid*="player"]');
+                    return {
+                        disabled: element.disabled,
+                        ariaDisabled: element.getAttribute('aria-disabled'),
+                        className: String(element.className || ''),
+                        display: style.display,
+                        visibility: style.visibility,
+                        opacity: style.opacity,
+                        pointerEvents: style.pointerEvents,
+                        elementAtCenter: hit,
+                        playerClass: player ? String(player.className || '') : null,
+                        playerChildCount: player ? player.children.length : null,
+                    };
+                }""",
+                {"x": box["x"] + box["width"] / 2, "y": box["y"] + box["height"] / 2} if box else None,
+            )
+            visible = button.is_visible(timeout=500)
+            disabled = bool(computed["disabled"])
+            aria_disabled = computed["ariaDisabled"]
+            snapshot["button"].update({
+                "visible": visible,
+                "enabled": visible and not disabled and aria_disabled != "true",
+                "disabled": disabled,
+                "aria_disabled": aria_disabled,
+                "class_name": computed["className"],
+                "bbox": box,
+                "display": computed["display"],
+                "visibility": computed["visibility"],
+                "opacity": computed["opacity"],
+                "pointer_events": computed["pointerEvents"],
+                "element_at_center": computed["elementAtCenter"] if box else "no-bounding-box",
+            })
+            snapshot["dom"] = {"player_class": computed["playerClass"], "player_child_count": computed["playerChildCount"]}
+    except Exception:
+        pass
+    try:
+        snapshot["videos"] = page.evaluate(
+            """() => Array.from(document.querySelectorAll('video')).map((video) => ({
+                currentSrc: video.currentSrc || '', src: video.getAttribute('src') || '',
+                videoWidth: video.videoWidth, videoHeight: video.videoHeight,
+                readyState: video.readyState, paused: video.paused, currentTime: video.currentTime
+            }))"""
+        )
+        snapshot["canvases"] = page.evaluate(
+            """() => Array.from(document.querySelectorAll('canvas')).map((canvas) => ({
+                width: canvas.width, height: canvas.height,
+                clientWidth: canvas.clientWidth, clientHeight: canvas.clientHeight
+            }))"""
+        )
+        performance = page.evaluate(
+            """() => performance.getEntriesByType('resource').map((entry) => entry.name)
+                .filter((name) => /transcode-|video\\.mp4|camera_alignment|\\.veo|\\/panorama\\//i.test(name))"""
+        )
+        snapshot["_performance_resources_raw"] = list(dict.fromkeys(performance))
+        snapshot["performance_resources"] = [sanitize_url(value) for value in snapshot["_performance_resources_raw"]]
+        snapshot["relevant_resources"] = snapshot["performance_resources"]
+    except Exception:
+        snapshot["_performance_resources_raw"] = []
+    return snapshot
+
+
+def _dom_change_summary(before: dict[str, object], after: dict[str, object]) -> dict[str, object]:
+    changed: list[str] = []
+    def video_structure(snapshot):
+        return [{key: video.get(key) for key in ("currentSrc", "src", "videoWidth", "videoHeight", "readyState", "paused")} for video in snapshot.get("videos", [])]
+
+    if video_structure(before) != video_structure(after):
+        changed.append("videos")
+    if before.get("canvases") != after.get("canvases"):
+        changed.append("canvases")
+    if before.get("dom") != after.get("dom"):
+        changed.append("player_dom")
+    before_button, after_button = before.get("button", {}), after.get("button", {})
+    for key in ("class_name", "disabled", "aria_disabled", "visible", "pointer_events"):
+        if before_button.get(key) != after_button.get(key):
+            changed.append(f"button.{key}")
+    before_resources = set(before.get("performance_resources", []))
+    after_resources = set(after.get("performance_resources", []))
+    new_resources = sorted(after_resources - before_resources)
+    if new_resources:
+        changed.append("performance_resources")
+    return {"changed": bool(changed), "changed_components": changed, "new_performance_resources": new_resources}
+
+
+def _safe_snapshot(snapshot: dict[str, object]) -> dict[str, object]:
+    safe = {key: value for key, value in snapshot.items() if not key.startswith("_")}
+    safe["videos"] = [
+        {
+            **video,
+            "currentSrc": sanitize_url(video.get("currentSrc", "")) if video.get("currentSrc") else "",
+            "src": sanitize_url(video.get("src", "")) if video.get("src") else "",
+        }
+        for video in snapshot.get("videos", [])
+    ]
+    return safe
+
+
+def _activate_primary_interactive(page, before_click, restore_after_failure, screenshot_before: Path | None, screenshot_after: Path | None) -> dict[str, object]:
+    """Use the observed button with a hit-tested physical pointer click."""
     result: dict[str, object] = {
         "primary_selector": PRIMARY_INTERACTIVE_SELECTOR,
         "primary_selector_found": False,
@@ -176,10 +353,15 @@ def _activate_primary_interactive(page, before_click, restore_after_failure) -> 
         "primary_selector_hover_required": False,
         "primary_selector_click_succeeded": False,
         "primary_selector_force_click_used": False,
+        "click_method_attempts": [],
+        "before": None,
+        "after": None,
+        "dom_change_summary": {"changed": False, "changed_components": [], "new_performance_resources": []},
+        "activation_method": None,
     }
     try:
         locator = page.locator(PRIMARY_INTERACTIVE_SELECTOR)
-        count = min(locator.count(), 12)
+        count = locator.count()
     except Exception:
         return result
     result["primary_selector_count"] = count
@@ -189,7 +371,7 @@ def _activate_primary_interactive(page, before_click, restore_after_failure) -> 
 
     def visible_buttons():
         visible = []
-        for index in range(count):
+        for index in range(min(count, 12)):
             try:
                 button = locator.nth(index)
                 if button.is_visible(timeout=500):
@@ -204,42 +386,82 @@ def _activate_primary_interactive(page, before_click, restore_after_failure) -> 
         _hover_player(page)
         buttons = visible_buttons()
     result["primary_selector_visible"] = bool(buttons)
-    for button in buttons:
-        previous_phase = before_click()
+    if not buttons:
+        return result
+    before = _snapshot_player(page)
+    result["before"] = _safe_snapshot(before)
+    if screenshot_before:
         try:
-            button.click(timeout=2_000)
-            result["primary_selector_click_succeeded"] = True
-            return result
+            screenshot_before.parent.mkdir(parents=True, exist_ok=True)
+            page.screenshot(path=str(screenshot_before), full_page=False)
         except Exception:
-            restore_after_failure(previous_phase)
-        # `force=True` is constrained to an attached, visible, exact semantic
-        # button whose center is not covered by another element.
-        if not _unobstructed(button):
-            continue
-        previous_phase = before_click()
+            pass
+    button = buttons[0]
+    hit = before["button"].get("element_at_center")
+    result["primary_selector_center_hit"] = hit
+    if before["button"].get("disabled") or before["button"].get("aria_disabled") == "true":
+        result["click_method_attempts"].append({"method": "mouse", "attempted": False, "reason": "Interactive button is disabled"})
+        return result
+    if hit == "overlaying-element":
+        result["click_method_attempts"].append({"method": "mouse", "attempted": False, "reason": "button center is covered by another element"})
+    else:
         try:
-            button.click(timeout=2_000, force=True)
-            result["primary_selector_click_succeeded"] = True
-            result["primary_selector_force_click_used"] = True
-            return result
+            box = button.bounding_box()
         except Exception:
+            box = None
+        previous_phase = before_click()
+        mouse_attempt = {"method": "mouse", "attempted": bool(box), "click_returned": False, "observable_change": False}
+        if box:
+            try:
+                page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                page.wait_for_timeout(150)
+                page.mouse.down()
+                page.wait_for_timeout(80)
+                page.mouse.up()
+                mouse_attempt["click_returned"] = True
+            except Exception as exc:
+                mouse_attempt["error"] = type(exc).__name__
+                restore_after_failure(previous_phase)
+        else:
             restore_after_failure(previous_phase)
+        page.wait_for_timeout(ACTIVATION_OBSERVE_MS)
+        after = _snapshot_player(page)
+        mouse_attempt["observable_change"] = _dom_change_summary(before, after)["changed"]
+        result["click_method_attempts"].append(mouse_attempt)
+        if mouse_attempt["click_returned"]:
+            result["primary_selector_click_succeeded"] = True
+            result["activation_method"] = "physical_mouse"
+        result["after"] = _safe_snapshot(after)
+        result["dom_change_summary"] = _dom_change_summary(before, after)
+        result["_before_performance_resources_raw"] = before.get("_performance_resources_raw", [])
+        result["_after_performance_resources_raw"] = after.get("_performance_resources_raw", [])
+        if screenshot_after:
+            try:
+                page.screenshot(path=str(screenshot_after), full_page=False)
+            except Exception:
+                pass
     return result
 
 
-def activate_interactive(page, before_click, restore_after_failure) -> dict[str, object]:
+def activate_interactive(page, before_click, restore_after_failure, screenshot_before: Path | None = None, screenshot_after: Path | None = None) -> dict[str, object]:
     """Open Interactive explicitly, including accessible menu-based controls.
 
-    Accessibility paths are intentional first choices. The menu pass only opens
+    The observed semantic button is first; accessibility paths are fallbacks.
+    The menu pass only opens
     visible controls whose own text indicates a view/menu; it does not click
     arbitrary page content or guess private player endpoints.
     """
-    primary = _activate_primary_interactive(page, before_click, restore_after_failure)
+    primary = _activate_primary_interactive(page, before_click, restore_after_failure, screenshot_before, screenshot_after)
     attempts: list[str] = ["button.interactive-player"] if primary["primary_selector_click_succeeded"] else []
     menu_controls: list[str] = []
     found = bool(primary["primary_selector_found"])
     if primary["primary_selector_click_succeeded"]:
         return {**primary, "interactive_control_found": True, "interactive_click_succeeded": True, "interactive_attempts": attempts, "menu_controls_inspected": menu_controls}
+
+    # If the exact semantic button existed, its physical-click result is
+    # authoritative. Do not fall through to a different text control after that.
+    if primary["primary_selector_found"]:
+        return {**primary, "interactive_control_found": True, "interactive_click_succeeded": False, "interactive_attempts": attempts, "menu_controls_inspected": menu_controls}
 
     def direct_control() -> tuple[bool, bool]:
         found = False
@@ -254,6 +476,8 @@ def activate_interactive(page, before_click, restore_after_failure) -> dict[str,
             visible, succeeded = _click_first_visible(locator, attempt, attempts, before_click, restore_after_failure)
             found = found or visible
             if succeeded:
+                primary["activation_method"] = "locator_click"
+                primary["click_method_attempts"].append({"method": "locator_click", "attempted": True, "click_returned": True, "observable_change": None})
                 return found, True
         return found, False
 
@@ -306,18 +530,63 @@ def phase_diagnostics(candidates: list[VeoCandidate], interaction: dict[str, obj
     def final(role: str) -> list[dict[str, object]]:
         return [_candidate_reference(candidate) for candidate in candidates if candidate.role == role]
 
-    expected_after_click = [
-        candidate for candidate in candidates
-        if AFTER_INTERACTIVE_PHASE in candidate.discovery_phases
-        and (candidate.filename.lower().startswith("transcode-") and candidate.filename.lower().endswith(".mp4")
-             or candidate.filename.lower().endswith(".veo") or "camera_alignment" in candidate.filename.lower())
-    ]
-
+    post_transcode = any(
+        AFTER_INTERACTIVE_PHASE in candidate.discovery_phases
+        and candidate.filename.lower().startswith("transcode-")
+        and candidate.filename.lower().endswith(".mp4")
+        for candidate in candidates
+    )
+    post_calibration = any(
+        AFTER_INTERACTIVE_PHASE in candidate.discovery_phases
+        and candidate.filename.lower().endswith(".veo")
+        and candidate.field_length is not None
+        and candidate.field_width is not None
+        for candidate in candidates
+    )
+    confirmed = bool(interaction.get("interactive_click_succeeded") and post_transcode and post_calibration)
+    confirmation_reason = (
+        "post-Interactive transcode and valid calibration resources observed"
+        if confirmed
+        else "required post-Interactive transcode and valid calibration resources were not both observed"
+    )
     return {
         "default_phase_resources": in_phase(INITIAL_PHASE),
         "interactive_control_found": interaction["interactive_control_found"],
         "interactive_click_succeeded": interaction["interactive_click_succeeded"],
-        "interactive_activation_confirmed": bool(interaction["interactive_click_succeeded"] and expected_after_click),
+        "interactive_activation_confirmed": confirmed,
+        "activation": {"confirmed": confirmed, "confirmation_reason": confirmation_reason, "method": interaction.get("activation_method")},
+        "player_ready": interaction.get("player_ready", False),
+        "membership_modal_found": interaction.get("membership_modal_found", False),
+        "membership_modal_closed": interaction.get("membership_modal_closed", False),
+        "close_button_found": interaction.get("membership_close_button_found", False),
+        "interactive_button_found": interaction.get("primary_selector_found", False),
+        "interactive_button_visible": interaction.get("primary_selector_visible", False),
+        "interactive_center_hit": interaction.get("primary_selector_center_hit", "not-observed"),
+        "physical_click_attempted": any(
+            attempt.get("method") == "mouse" and attempt.get("attempted")
+            for attempt in interaction.get("click_method_attempts", [])
+        ),
+        "physical_click_succeeded": any(
+            attempt.get("method") == "mouse" and attempt.get("click_returned")
+            for attempt in interaction.get("click_method_attempts", [])
+        ),
+        "post_interactive_transcode_found": post_transcode,
+        "post_interactive_calibration_found": post_calibration,
+        "interactive_button": {
+            "selector": interaction.get("primary_selector", PRIMARY_INTERACTIVE_SELECTOR),
+            "found": interaction.get("primary_selector_found", False),
+            "count": interaction.get("primary_selector_count", 0),
+            "visible": interaction.get("primary_selector_visible", False),
+            "hover_required": interaction.get("primary_selector_hover_required", False),
+            "center_hit": interaction.get("primary_selector_center_hit", "not-observed"),
+            "click_method_attempts": interaction.get("click_method_attempts", []),
+        },
+        "before": interaction.get("before"),
+        "after": interaction.get("after"),
+        "dom_change_summary": interaction.get("dom_change_summary"),
+        "network_events": interaction.get("network_events", []),
+        "screenshot_before": interaction.get("screenshot_before"),
+        "screenshot_after": interaction.get("screenshot_after"),
         "primary_selector": interaction.get("primary_selector", PRIMARY_INTERACTIVE_SELECTOR),
         "primary_selector_found": interaction.get("primary_selector_found", False),
         "primary_selector_count": interaction.get("primary_selector_count", 0),
@@ -349,11 +618,16 @@ def inspect_match(match_url: str, profile_dir: Path, diagnostics_dir: Path) -> V
     calibration_details: dict[str, tuple[float, float, object]] = {}
     metadata: dict[str, str] = {}
     phase = INITIAL_PHASE
+    inspection_identifier = f"inspect_{uuid.uuid4().hex[:12]}"
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    screenshot_before = diagnostics_dir / f"{inspection_identifier}-before-interactive.png"
+    screenshot_after = diagnostics_dir / f"{inspection_identifier}-after-interactive.png"
+    network_events: list[dict[str, object]] = []
 
     def record_resource(url: str, content_type: str | None, discovered_phase: str) -> None:
         normalized = urlunsplit((*urlsplit(url)[:4], ""))
         path = urlsplit(normalized).path.lower()
-        if not (any(token in path for token in (".mp4", ".m3u8", ".mpd", ".veo", "camera_alignment")) or (content_type and content_type.startswith("video/"))):
+        if not (path.endswith((".mp4", ".m3u8", ".mpd", ".veo")) or (content_type and content_type.startswith("video/"))):
             return
         if normalized not in seen and len(seen) >= MAX_RESOURCES:
             return
@@ -369,10 +643,16 @@ def inspect_match(match_url: str, profile_dir: Path, diagnostics_dir: Path) -> V
 
         def remember(response):
             content = response.headers.get("content-type")
+            if _is_relevant_resource(response.url):
+                network_events.append({"kind": "response", "url": sanitize_url(response.url), "status": response.status, "phase": phase})
             if response.status not in {200, 206}:
                 return
             record_resource(response.url, content, phase)
             size = response.headers.get("content-length", "")
+            resource = seen.get(urlunsplit((*urlsplit(response.url)[:4], "")))
+            total = response.headers.get("content-range", "").rsplit("/", 1)[-1] if response.status == 206 else size
+            if resource is not None and total.isdigit():
+                resource["size_bytes"] = int(total)
             if content and "json" in content and size.isdigit() and int(size) <= 2_000_000:
                 try:
                     payload = response.json()
@@ -385,17 +665,36 @@ def inspect_match(match_url: str, profile_dir: Path, diagnostics_dir: Path) -> V
                 except Exception:
                     pass
 
+        def remember_request(request):
+            if _is_relevant_resource(request.url):
+                network_events.append({"kind": "request", "url": sanitize_url(request.url), "method": request.method, "phase": phase})
+                record_resource(request.url, None, phase)
+
         page.on("response", remember)  # Attached before page/player initialization.
+        page.on("request", remember_request)
         interaction: dict[str, object] = {
             "interactive_control_found": False,
             "interactive_click_succeeded": False,
             "interactive_attempts": [],
             "menu_controls_inspected": [],
+            "membership_modal_found": False,
+            "membership_modal_closed": False,
+            "membership_close_button_found": False,
         }
         try:
             page.goto(target, wait_until="domcontentloaded", timeout=30_000)
+            page.wait_for_timeout(500)
+            interaction.update(dismiss_membership_modal(page))
             player_ready = wait_for_player(page)
             page.wait_for_timeout(INITIAL_CAPTURE_MS)
+            metadata.setdefault("title", page.title())
+            initial_snapshot = _snapshot_player(page)
+            for raw in initial_snapshot.get("_performance_resources_raw", []):
+                record_resource(raw, None, INITIAL_PHASE)
+            for video in initial_snapshot.get("videos", []):
+                for key in ("currentSrc", "src"):
+                    if video.get(key, "").startswith("https://"):
+                        record_resource(video[key], None, INITIAL_PHASE)
 
             def start_interactive_phase() -> str:
                 nonlocal phase
@@ -407,10 +706,38 @@ def inspect_match(match_url: str, profile_dir: Path, diagnostics_dir: Path) -> V
                 nonlocal phase
                 phase = previous_phase
 
-            interaction = activate_interactive(page, start_interactive_phase, restore_phase)
+            interaction = activate_interactive(page, start_interactive_phase, restore_phase, screenshot_before, screenshot_after)
             interaction["player_ready"] = player_ready
-            if interaction["interactive_click_succeeded"]:
+            interaction["network_events"] = network_events[:200]
+            interaction["screenshot_before"] = str(screenshot_before) if screenshot_before.exists() else None
+            interaction["screenshot_after"] = str(screenshot_after) if screenshot_after.exists() else None
+            for raw in interaction.get("_before_performance_resources_raw", []):
+                normalized = urlunsplit((*urlsplit(raw)[:4], ""))
+                if normalized not in seen:
+                    record_resource(raw, None, INITIAL_PHASE)
+            for raw in interaction.get("_after_performance_resources_raw", []):
+                normalized = urlunsplit((*urlsplit(raw)[:4], ""))
+                if normalized not in seen:
+                    record_resource(raw, None, AFTER_INTERACTIVE_PHASE)
+            if phase == AFTER_INTERACTIVE_PHASE:
                 page.wait_for_timeout(POST_INTERACTIVE_CAPTURE_MS)
+            final_snapshot = _snapshot_player(page)
+            for raw in final_snapshot.get("_performance_resources_raw", []):
+                if raw not in initial_snapshot.get("_performance_resources_raw", []):
+                    record_resource(raw, None, phase)
+            for video in final_snapshot.get("videos", []):
+                for key in ("currentSrc", "src"):
+                    raw = video.get(key, "")
+                    if raw.startswith("https://") and not any(raw == v.get(key) for v in initial_snapshot.get("videos", [])):
+                        record_resource(raw, None, phase)
+            interaction["after"] = _safe_snapshot(final_snapshot)
+            try:
+                page.screenshot(path=str(screenshot_after), full_page=False)
+                interaction["screenshot_after"] = str(screenshot_after)
+            except Exception:
+                pass
+            interaction["network_events"] = network_events[:200]
+            interaction["interactive_click_succeeded"] = bool(interaction["interactive_click_succeeded"] or any(attempt.get("click_returned") for attempt in interaction.get("click_method_attempts", [])))
 
             for resource in list(seen.values()):
                 url = str(resource["url"])
@@ -459,12 +786,13 @@ def inspect_match(match_url: str, profile_dir: Path, diagnostics_dir: Path) -> V
     for resource, candidate in entries:
         url = str(resource["url"])
         candidate.cookies = cookies.get(url, [])
+        candidate.size_bytes = resource.get("size_bytes")
         if url in calibration_details:
             candidate.field_length, candidate.field_width, version = calibration_details[url]
             candidate.calibration_version = str(version) if version is not None else None
         candidates.append(candidate)
     inspection = VeoInspection(
-        identifier=f"inspect_{uuid.uuid4().hex[:12]}",
+        identifier=inspection_identifier,
         match_url=target,
         safe_match_url=sanitize_url(target),
         metadata=metadata,
@@ -473,6 +801,6 @@ def inspect_match(match_url: str, profile_dir: Path, diagnostics_dir: Path) -> V
     )
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
     diagnostic = diagnostics_dir / f"{inspection.identifier}.json"
-    diagnostic.write_text(json.dumps(inspection.public_dict(), indent=2), encoding="utf-8")
     inspection.diagnostic_path = str(diagnostic)
+    diagnostic.write_text(json.dumps(inspection.public_dict(), indent=2), encoding="utf-8")
     return inspection

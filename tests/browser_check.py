@@ -60,7 +60,7 @@ def main():
                     errors = []
                     page.on('pageerror', lambda error: errors.append(str(error)))
                     page.goto('http://127.0.0.1:5175')
-                    page.get_by_role('heading', name='Match library').wait_for()
+                    page.get_by_role('heading', name='Matches', exact=True).wait_for()
                     for index, calibration in enumerate(sorted((ROOT / 'data').glob('*.veo'))):
                         image_path = ROOT / 'samples' / ('stacked_frame.jpg' if index == 0 else 'match2_stacked_frame.jpg')
                         image = cv2.imread(str(image_path))
@@ -89,24 +89,35 @@ def main():
                         response = request.post(f"http://127.0.0.1:8005/api/matches/{match['id']}/media/path", data={'path': str(clip), 'role': role})
                         assert response.status == 201
                     page.reload()
-                    page.get_by_role('button', name='Open workspace').click()
+                    captures = Path(os.environ['VEO_UI_CAPTURE_DIR']) if os.environ.get('VEO_UI_CAPTURE_DIR') else None
+                    if captures:
+                        captures.mkdir(parents=True, exist_ok=True)
+                        page.get_by_role('button', name='Open match', exact=True).wait_for()
+                        page.screenshot(path=str(captures / 'library.png'))
+                    page.get_by_role('button', name='Open match', exact=True).click()
                     page.wait_for_function("document.querySelector('video')?.readyState >= 2")
                     page.get_by_label('Time (s)').fill('1.2')
                     page.wait_for_function("Math.abs(document.querySelector('video').currentTime-1.2)<0.02 && !document.querySelector('video').seeking")
-                    page.get_by_role('button', name='Dual lenses', exact=True).click()
+                    page.get_by_role('button', name='Dual lens', exact=True).click()
                     page.get_by_role('button', name='RIGHT', exact=True).click()
                     page.locator('canvas').first.click(position={'x': 400, 'y': 250})
-                    page.get_by_text('1 selected', exact=True).wait_for()
+                    page.get_by_role('button', name='Measurements · 1 points').wait_for()
                     page.get_by_role('button', name='Tracking', exact=True).click()
                     page.wait_for_function("Math.abs(document.querySelector('video').currentTime-1.2)<0.02")
-                    assert page.get_by_text('No timestamped virtual-camera', exact=False).count() == 1
-                    page.get_by_role('button', name='Panoramic', exact=True).click()
+                    assert page.get_by_text('Tracking supports playback.', exact=False).count() == 1
+                    page.get_by_role('button', name='Panorama', exact=True).click()
                     page.wait_for_function("document.querySelector('video')?.readyState >= 2 && !document.querySelector('video').seeking")
                     page.locator('canvas').first.click(position={'x': 500, 'y': 320})
-                    page.get_by_text('2 selected', exact=True).wait_for()
+                    page.get_by_role('button', name='Measurements · 2 points').wait_for()
                     page.get_by_role('button', name='Play', exact=True).click()
                     page.wait_for_function("document.querySelector('video').currentTime > 1.5")
                     page.get_by_role('button', name='Pause', exact=True).click()
+                    if captures:
+                        page.screenshot(path=str(captures / 'workspace.png'))
+                        page.get_by_role('button', name='Manage files', exact=True).click()
+                        page.get_by_role('dialog').wait_for()
+                        page.screenshot(path=str(captures / 'manage-files.png'), animations='disabled')
+                        page.get_by_role('button', name='Done', exact=True).click()
                     page.set_viewport_size({'width': 900, 'height': 1000})
                     assert page.locator('svg[aria-label="Pitch reference"]').count() == 1
                     assert not errors, errors

@@ -6,6 +6,7 @@ import json
 import threading
 import uuid
 import re
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -36,13 +37,18 @@ class WorkspaceStore:
         if not re.fullmatch(r"match_[a-zA-Z0-9_-]+", match_id):
             raise ValueError("Invalid match identifier")
         directory = self.runtime_root / "matches" / match_id
+        parent = self.runtime_root / "matches"
+        if parent.is_symlink() or directory.is_symlink() or directory.resolve().parent != parent.resolve():
+            raise ValueError("Match directory is outside managed storage")
         directory.mkdir(parents=True, exist_ok=True)
         return directory
 
     def asset_dir(self, match_id: str, category: str) -> Path:
-        if category not in {"media", "frames", "calibration", "cache", "diagnostics"}:
+        if category not in {"media", "frames", "calibration", "cache", "diagnostics", "clips", "analysis"}:
             raise ValueError("Invalid asset category")
         path = self.match_dir(match_id) / category
+        if path.is_symlink() or path.resolve().parent != self.match_dir(match_id).resolve():
+            raise ValueError("Asset directory is outside managed storage")
         path.mkdir(exist_ok=True)
         return path
 
@@ -109,3 +115,56 @@ class WorkspaceStore:
             if item is not None:
                 return match, item
         return None
+
+    def _remove_managed_file(self, match_id: str, resource: dict | None) -> None:
+        if not resource or resource.get("ownership", "managed" if resource.get("source") in {"upload", "veo_import", "extracted"} else "external") != "managed":
+            return
+        path = Path(resource["path"])
+        root = self.match_dir(match_id).resolve()
+        # Even legacy metadata may only authorize deletion inside this match.
+        if path.resolve().is_relative_to(root) and path.is_file():
+            path.unlink()
+
+    def attach_media(self, match_id: str, record: dict) -> dict | None:
+        with self._lock:
+            old = []
+            def update(item):
+                if record.get("role") in {"tracking", "dual_lens"}:
+                    old.extend(value for value in item["media"] if value.get("role") == record["role"] and value["id"] != record["id"])
+                item["media"] = [value for value in item["media"] if value not in old and value["id"] != record["id"]] + [record]
+            result = self.update_match(match_id, update)
+            for resource in old:
+                if resource["path"] != record["path"]:
+                    self._remove_managed_file(match_id, resource)
+            return result
+
+    def set_calibration(self, match_id: str, calibration: dict | None) -> dict | None:
+        with self._lock:
+            match = self.match(match_id)
+            if match is None:
+                return None
+            result = self.update_match(match_id, lambda item: item.update(calibration=calibration))
+            if match.get("calibration") and (not calibration or match["calibration"]["path"] != calibration["path"]):
+                self._remove_managed_file(match_id, match["calibration"])
+            return result
+
+    def remove_media(self, match_id: str, media_id: str) -> None:
+        with self._lock:
+            match = self.match(match_id)
+            if match is None:
+                return
+            resource = next((item for item in match["media"] if item["id"] == media_id), None)
+            self.update_match(match_id, lambda item: item.update(media=[value for value in item["media"] if value["id"] != media_id]))
+            self._remove_managed_file(match_id, resource)
+
+    def delete_match(self, match_id: str) -> bool:
+        with self._lock:
+            if self.match(match_id) is None:
+                return False
+            directory = self.match_dir(match_id)
+            if directory.is_symlink() or directory.resolve().parent != (self.runtime_root / "matches").resolve():
+                raise ValueError("Match directory is outside managed storage")
+            # No paths from resource metadata are traversed. rmtree does not follow
+            # child symlinks, so referenced input files and output/ are untouched.
+            shutil.rmtree(directory)
+            return True

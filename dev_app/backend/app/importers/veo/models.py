@@ -4,6 +4,17 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
+
+
+def importable(candidate: VeoCandidate) -> bool:
+    """Only positively identified complete media files and parsed calibration."""
+    path = urlsplit(candidate.url).path.lower()
+    if candidate.role == "calibration":
+        return path.endswith(".veo") and candidate.field_length is not None and candidate.field_width is not None
+    if candidate.role == "panorama" and not (candidate.filename.lower().startswith("transcode-") or (candidate.width, candidate.height) == (2048, 2048)):
+        return False
+    return candidate.role in {"ball_tracking", "panorama"} and path.endswith(".mp4")
 
 
 @dataclass
@@ -24,6 +35,7 @@ class VeoCandidate:
     field_length: float | None = None
     field_width: float | None = None
     calibration_version: str | None = None
+    size_bytes: int | None = None
     cookies: list[dict] = field(default_factory=list, repr=False)
 
     def public_dict(self) -> dict[str, Any]:
@@ -44,6 +56,11 @@ class VeoInspection:
     diagnostic_path: str | None = None
 
     def public_dict(self) -> dict[str, Any]:
+        resolved = {}
+        for role in ("ball_tracking", "panorama", "calibration"):
+            choices = sorted((item for item in self.candidates if item.role == role and importable(item)), key=lambda item: item.confidence, reverse=True)
+            if choices:
+                resolved[role] = choices[0].identifier
         return {
             "id": self.identifier,
             "match_url": self.safe_match_url,
@@ -51,4 +68,6 @@ class VeoInspection:
             "candidates": [candidate.public_dict() for candidate in self.candidates],
             "interaction": self.interaction,
             "diagnostic_path": self.diagnostic_path,
+            "resolved_assets": resolved,
+            "ready": len(resolved) == 3,
         }

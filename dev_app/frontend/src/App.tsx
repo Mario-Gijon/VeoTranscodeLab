@@ -13,6 +13,11 @@ export default function App() {
   const [ready, setReady] = useState(false)
   const [error, setError] = useState('')
   const refresh = async () => { try { const [nextMatches, nextCalibrations] = await Promise.all([api.matches(), api.calibrations()]); setMatches(nextMatches); setCalibrations(nextCalibrations) } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not contact the FastAPI backend.') } finally { setReady(true) } }
-  useEffect(() => { if (!workspaceId) void refresh() }, [workspaceId])
-  return <><AppBar position="sticky" elevation={0} sx={{ borderBottom: 1, borderColor: 'divider', bgcolor: '#101925' }}><Toolbar variant="dense"><Typography variant="subtitle1" fontWeight={800} sx={{ flexGrow: 1 }}>Veo Match Lab</Typography>{workspaceId && <Button color="inherit" size="small" startIcon={<HomeIcon />} onClick={() => setWorkspaceId(null)}>Library</Button>}</Toolbar></AppBar>{!ready ? <Box sx={{ minHeight: '50vh', display: 'grid', placeItems: 'center' }}><CircularProgress /></Box> : error ? <Box sx={{ p: 4 }}><Typography color="error">{error}</Typography><Button onClick={() => { setError(''); setReady(false); void refresh() }}>Retry</Button></Box> : workspaceId ? <WorkspacePage matchId={workspaceId} calibrations={calibrations} onBack={() => setWorkspaceId(null)} /> : <LibraryPage matches={matches} calibrations={calibrations} onOpen={setWorkspaceId} onCreated={(match) => { setMatches((items) => [...items, match]); setWorkspaceId(match.id) }} />}</>
+  useEffect(() => {
+    if (workspaceId) return
+    void refresh()
+    const timer = window.setInterval(() => void refresh(), 4000)
+    return () => window.clearInterval(timer)
+  }, [workspaceId])
+  return <><AppBar position="sticky" elevation={0} sx={{ borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper' }}><Toolbar variant="dense"><Typography variant="subtitle1" fontWeight={800} sx={{ flexGrow: 1 }}>Veo Match Lab</Typography>{workspaceId && <Button color="inherit" size="small" startIcon={<HomeIcon />} onClick={() => setWorkspaceId(null)}>Library</Button>}</Toolbar></AppBar>{!ready ? <Box sx={{ minHeight: '50vh', display: 'grid', placeItems: 'center' }}><CircularProgress /></Box> : error ? <Box sx={{ p: 4 }}><Typography color="error">{error}</Typography><Button onClick={() => { setError(''); setReady(false); void refresh() }}>Retry</Button></Box> : workspaceId ? <WorkspacePage key={workspaceId} matchId={workspaceId} calibrations={calibrations} onBack={() => setWorkspaceId(null)} /> : <LibraryPage matches={matches} calibrations={calibrations} onOpen={setWorkspaceId} onRefresh={refresh} />}</>
 }

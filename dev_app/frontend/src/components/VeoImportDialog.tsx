@@ -1,13 +1,16 @@
-import { Alert, Button, Dialog, DialogActions, DialogContent, DialogTitle, LinearProgress, MenuItem, Select, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material'
+import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, LinearProgress, Stack, TextField, Typography } from '@mui/material'
 import { useEffect, useState } from 'react'
 import { api } from '../api/client'
-import type { VeoInspection, VeoJob, VeoSession } from '../types'
+import type { MatchWorkspace, VeoInspection, VeoJob, VeoSession } from '../types'
 
-export default function VeoImportDialog({ open, onClose, onComplete }: { open: boolean; onClose: () => void; onComplete: (id: string) => void }) {
-  const [url, setUrl] = useState('')
+const roles = [['ball_tracking', 'Tracking'], ['panorama', 'Dual lens'], ['calibration', 'Calibration']] as const
+const bytes = (value: number) => value >= 1e9 ? (value / 1e9).toFixed(2) + ' GB' : (value / 1e6).toFixed(1) + ' MB'
+const statusLabel: Record<string, string> = { waiting: 'Waiting', downloading: 'Downloading', complete: 'Complete', failed: 'Failed', cancelled: 'Cancelled' }
+
+export default function VeoImportDialog({ open, retryMatch, onClose, onComplete }: { open: boolean; retryMatch?: MatchWorkspace | null; onClose: () => void; onComplete: (id: string) => void }) {
+  const [url, setUrl] = useState(retryMatch?.metadata?.veo_url || '')
   const [session, setSession] = useState<VeoSession | null>(null)
   const [inspection, setInspection] = useState<VeoInspection | null>(null)
-  const [selection, setSelection] = useState<Record<string, string>>({})
   const [job, setJob] = useState<VeoJob | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -24,35 +27,35 @@ export default function VeoImportDialog({ open, onClose, onComplete }: { open: b
     refresh()
     const timer = window.setInterval(refresh, 2500)
     const saved = window.sessionStorage.getItem('veo-import-job')
-    if (saved) void api.veoJob(saved).then(setJob).catch(() => window.sessionStorage.removeItem('veo-import-job'))
+    if (retryMatch) void api.matchJob(retryMatch.id).then((value) => setJob(value?.status === 'completed' ? null : value)).catch((e: Error) => setError(e.message))
+    else if (saved) void api.veoJob(saved).then((value) => { if (['queued', 'downloading'].includes(value.status)) setJob(value) }).catch(() => window.sessionStorage.removeItem('veo-import-job'))
     return () => window.clearInterval(timer)
-  }, [open])
+  }, [open, retryMatch])
   useEffect(() => {
     if (!active || !jobId) return
-    const timer = window.setInterval(() => {
-      void api.veoJob(jobId).then(setJob).catch((e: Error) => setError(e.message))
-    }, 1000)
+    const timer = window.setInterval(() => { void api.veoJob(jobId).then(setJob).catch((e: Error) => setError(e.message)) }, 700)
     return () => window.clearInterval(timer)
   }, [active, jobId])
-
-  return <Dialog open={open} onClose={onClose} fullWidth maxWidth="lg"><DialogTitle>Import from Veo</DialogTitle><DialogContent><Stack spacing={2} mt={1}>
+  const ready = !!inspection?.ready && !!inspection.resolved_assets && !active && !busy && job?.status !== 'completed'
+  return <Dialog open={open} onClose={busy ? undefined : onClose} fullWidth maxWidth="sm"><DialogTitle>{active ? 'Importing match' : retryMatch ? 'Resume import · ' + retryMatch.name : 'Import from Veo'}</DialogTitle><DialogContent><Stack gap={2} mt={1}>
     {error && <Alert severity="error">{error}</Alert>}{session?.error && <Alert severity="warning">{session.error}</Alert>}
-    <Typography variant="body2">Connect your dedicated Veo session, inspect an authorized match, then review the files before downloading.</Typography>
-    <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap"><Button disabled={busy || active} onClick={() => void run(async () => setSession(await api.connectVeo()))}>Connect Veo</Button><Button disabled={busy || active} onClick={() => void run(async () => setSession(await api.disconnectVeo()))}>Disconnect Veo</Button><Typography variant="caption">{session?.connect_browser_running ? 'Login browser open — close it when finished' : session?.profile_exists ? 'Local profile available · login validity checked during inspection' : 'No local session'}</Typography></Stack>
-    <TextField label="Authorized Veo match URL" value={url} disabled={active || busy} onChange={(e) => setUrl(e.target.value)} />
-    <Button variant="outlined" disabled={!url || busy || active || session?.connect_browser_running} onClick={() => void run(async () => { setInspection(await api.inspectVeo(url)); setSelection({}); setJob(null) })}>{busy ? 'Working…' : 'Inspect match'}</Button>
-    {inspection && <>
-      <Typography variant="subtitle1">{inspection.metadata.title || 'Match title not supplied'} · {inspection.candidates.length} resources</Typography>
-      {Object.entries(inspection.metadata).filter(([key]) => key !== 'title').map(([key, value]) => <Typography key={key} variant="body2">{key}: {value}</Typography>)}
-      <Alert severity={inspection.interaction.interactive_activation_confirmed ? 'success' : 'warning'}>
-        Default view: {inspection.interaction.default_phase_resources.length} resources · {inspection.interaction.primary_selector}: {inspection.interaction.primary_selector_found ? `found (${inspection.interaction.primary_selector_count})` : 'not found'}{inspection.interaction.primary_selector_hover_required ? ' · player hover attempted' : ''} · {inspection.interaction.interactive_activation_confirmed ? `Interactive confirmed by ${inspection.interaction.post_interactive_resources.length} post-Interactive resources.` : inspection.interaction.interactive_click_succeeded ? 'Interactive button clicked, but expected transcode/calibration traffic was not observed.' : 'Interactive was not activated; only default-view resources are classified.'}
-      </Alert>
-      {!inspection.candidates.length && <Alert severity="info">No assets discovered. Check access in Connect Veo. Some player modes only load their resources after activation; no private endpoints are guessed.</Alert>}
-      <Typography variant="body2">Choose a role for each file to import. Unknown resources remain visible; manifests cannot be downloaded as complete videos.</Typography>
-      <Table size="small"><TableHead><TableRow><TableCell>File / resource</TableCell><TableCell>Media metadata</TableCell><TableCell>Evidence</TableCell><TableCell>Import as</TableCell></TableRow></TableHead><TableBody>
-        {inspection.candidates.map((candidate) => <TableRow key={candidate.identifier}><TableCell sx={{ maxWidth: 280, overflowWrap: 'anywhere' }}>{candidate.filename}<Typography variant="caption" display="block">{candidate.content_type ?? 'Content type unknown'}</Typography></TableCell><TableCell>{candidate.width && candidate.height ? `${candidate.width}×${candidate.height}` : 'Dimensions unknown'}<br />{candidate.fps?.toFixed(2) ?? '—'} fps · {candidate.duration_s?.toFixed(1) ?? '—'} s{candidate.field_length && <Typography variant="body2">Field {candidate.field_length}×{candidate.field_width} m · calibration {candidate.calibration_version ?? 'unknown version'}</Typography>}</TableCell><TableCell>{candidate.role} · {Math.round(candidate.confidence * 100)}%<Typography variant="caption" display="block">{candidate.discovery_phases.map((phase) => phase === 'initial' ? 'default view' : 'after Interactive').join(', ')}</Typography><Typography variant="caption" display="block">{candidate.reasons.join('; ')}</Typography></TableCell><TableCell><Select size="small" value={Object.keys(selection).find((role) => selection[role] === candidate.identifier) ?? ''} disabled={active || candidate.role === 'manifest'} displayEmpty onChange={(e) => { const next = Object.fromEntries(Object.entries(selection).filter(([, id]) => id !== candidate.identifier)); if (e.target.value) next[e.target.value] = candidate.identifier; setSelection(next) }}><MenuItem value="">Skip</MenuItem>{candidate.role === 'calibration' ? <MenuItem value="calibration">Calibration</MenuItem> : [<MenuItem key="panorama" value="panorama">Dual-lens source</MenuItem>, <MenuItem key="tracking" value="ball_tracking">Tracking video</MenuItem>]}</Select></TableCell></TableRow>)}
-      </TableBody></Table>
+    {!active && <>
+      <TextField label="Veo URL" value={url} disabled={busy || !!retryMatch} onChange={(e) => { setUrl(e.target.value); setInspection(null); setJob(null) }} placeholder="https://app.veo.co/matches/…" />
+      <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1}><Typography variant="body2" color="text.secondary">Session: {session?.connect_browser_running ? 'Sign in, then close the browser' : session?.profile_exists ? 'Saved · checked on inspection' : 'Not connected'}</Typography><Button disabled={busy} onClick={() => void run(async () => setSession(await api.connectVeo()))}>{session?.profile_exists ? 'Reconnect' : 'Connect Veo'}</Button></Stack>
+      <Button variant="outlined" disabled={!url.trim() || busy || session?.connect_browser_running} onClick={() => void run(async () => setInspection(await api.inspectVeo(url)))}>{busy ? 'Inspecting match…' : inspection ? 'Retry inspection' : 'Inspect'}</Button>
+      {busy && <LinearProgress />}
     </>}
-    {job && <><Typography>{job.status} · {job.current_asset ?? 'Import job'} · {(job.bytes_downloaded / 1048576).toFixed(1)} MB in current file</Typography><LinearProgress variant="determinate" value={(job.progress ?? 0) * 100} />{job.error && <Alert severity="error">{job.error}</Alert>}{active && <Button color="warning" onClick={() => void run(async () => setJob(await api.cancelVeoJob(job.identifier)))}>Cancel import</Button>}{job.match_id && !active && <Button onClick={() => onComplete(job.match_id!)}>Open {job.status === 'completed' ? 'match' : 'partially imported match'}</Button>}</>}
-  </Stack></DialogContent><DialogActions><Button onClick={onClose}>Close</Button><Button variant="contained" disabled={!inspection || !Object.keys(selection).length || busy || active} onClick={() => void run(async () => { const next = await api.importVeo(inspection!.id, selection); setJob(next); window.sessionStorage.setItem('veo-import-job', next.identifier) })}>Import match</Button></DialogActions></Dialog>
+    {inspection && !active && <>
+      {inspection.metadata.title && <Typography variant="subtitle2">{inspection.metadata.title}</Typography>}
+      {roles.map(([role, label]) => { const candidate = inspection.candidates.find((item) => item.identifier === inspection.resolved_assets[role]); return <Stack direction="row" key={role} gap={2} alignItems="center"><Typography variant="body2" sx={{ width: 90 }}>{label}</Typography><Typography variant="body2" noWrap color={candidate ? 'primary.main' : 'text.secondary'}>{candidate ? '✓ ' + candidate.filename : 'Missing'}</Typography></Stack> })}
+      {!inspection.ready && <Alert severity="info">All three files are needed for a Veo import. Check access to this match, then retry inspection.</Alert>}
+    </>}
+    {job && <>
+      {roles.map(([role, label]) => { const item = job.assets?.[role]; const ratio = item?.bytes_total ? Math.min(100, item.bytes_downloaded / item.bytes_total * 100) : null; return <Box key={role}><Stack direction="row" justifyContent="space-between" mb={.5}><Typography variant="subtitle2">{label}</Typography><Typography variant="caption" color="text.secondary">{statusLabel[item?.status || 'waiting'] || 'Waiting'}{ratio !== null ? ' · ' + Math.round(ratio) + '%' : ''}</Typography></Stack><LinearProgress variant={item?.status === 'downloading' && ratio === null ? 'indeterminate' : 'determinate'} value={ratio ?? 0} sx={{ height: 5, borderRadius: 1 }} />{!!item?.bytes_downloaded && <Typography variant="caption" color="text.secondary">{bytes(item.bytes_downloaded)}{item.bytes_total ? ' / ' + bytes(item.bytes_total) : ' transferred'}</Typography>}</Box> })}
+      <Box><Stack direction="row" justifyContent="space-between"><Typography variant="body2">Overall</Typography><Typography variant="caption">{job.progress != null ? Math.round(job.progress * 100) + '%' : (job.completed_assets || 0) + ' / 3 files complete'}</Typography></Stack><LinearProgress variant={active && job.progress == null ? 'indeterminate' : 'determinate'} value={(job.progress ?? 0) * 100} /></Box>
+      {job.error && <Alert severity="error">{job.error}</Alert>}{job.status === 'cancelled' && <Alert severity="info">Import cancelled. Completed files are saved; you can retry the remaining files.</Alert>}{job.status === 'completed' && <Alert severity="success">Match saved. All three files are ready.</Alert>}
+      {active ? <Button onClick={() => void run(async () => setJob(await api.cancelVeoJob(job.identifier)))}>Cancel import</Button> : job.match_id && <Button variant={job.status === 'completed' ? 'contained' : 'outlined'} onClick={() => onComplete(job.match_id!)}>Open {job.status === 'completed' ? 'match' : 'partial match'}</Button>}
+    </>}
+    <Accordion disableGutters elevation={0}><AccordionSummary><Typography variant="caption" color="text.secondary">Developer diagnostics</Typography></AccordionSummary><AccordionDetails><Button size="small" disabled={busy || active} onClick={() => void run(async () => setSession(await api.disconnectVeo()))}>Disconnect Veo</Button>{inspection && <Box component="pre" sx={{ fontSize: 11, maxHeight: 260, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{JSON.stringify(inspection, null, 2)}</Box>}</AccordionDetails></Accordion>
+  </Stack></DialogContent><DialogActions><Button disabled={busy} onClick={onClose}>{active ? 'Continue in background' : 'Close'}</Button>{job?.status !== 'completed' && <Button variant="contained" disabled={!ready} onClick={() => void run(async () => { const next = await api.importVeo(inspection!.id, inspection!.resolved_assets, job?.match_id || retryMatch?.id); setJob(next); window.sessionStorage.setItem('veo-import-job', next.identifier) })}>{job || retryMatch ? 'Retry remaining files' : 'Import match'}</Button>}</DialogActions></Dialog>
 }

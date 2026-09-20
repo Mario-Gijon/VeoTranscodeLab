@@ -58,14 +58,18 @@ def test_http_invalid_calibration_and_upload(client):
 
 def test_http_veo_mocked_inspection_and_job(client, monkeypatch):
     candidate = classify_resource('asset', 'https://cdn.example/camera_alignment.veo?secret=hidden', 'application/json')
-    inspected = VeoInspection('inspection', 'https://app.veo.co/x', 'https://app.veo.co/x', candidates=[candidate])
+    candidate.field_length, candidate.field_width = 105, 68
+    tracking = classify_resource('tracking', 'https://cdn.example/video.mp4', discovery_phases=['initial'])
+    dual = classify_resource('dual', 'https://cdn.example/transcode-id.mp4', discovery_phases=['after_interactive'])
+    inspected = VeoInspection('inspection', 'https://app.veo.co/x', 'https://app.veo.co/x', candidates=[candidate, tracking, dual])
     monkeypatch.setattr('dev_app.backend.app.importers.veo.service.inspect_match', lambda *args: inspected)
     response = client.post('/api/veo/inspect', json={'match_url': 'https://app.veo.co/x'})
     assert response.status_code == 200 and 'hidden' not in response.text
     assert client.post('/api/veo/import', json={'inspection_id': 'inspection', 'selected_assets': {}}).status_code == 422
     # Keep the background worker deterministic while exercising job HTTP serialization.
     monkeypatch.setattr(main.veo_imports, '_run_import', lambda job: None)
-    job = client.post('/api/veo/import', json={'inspection_id': 'inspection', 'selected_assets': {'calibration': 'asset'}})
+    assert client.post('/api/veo/import', json={'inspection_id': 'inspection', 'selected_assets': {'calibration': 'asset'}}).status_code == 422
+    job = client.post('/api/veo/import', json={'inspection_id': 'inspection', 'selected_assets': {'calibration': 'asset', 'ball_tracking': 'tracking', 'panorama': 'dual'}})
     assert job.status_code == 202
     identifier = job.json()['identifier']
     assert client.get(f'/api/veo/import/{identifier}').json()['status'] == 'queued'

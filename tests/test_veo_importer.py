@@ -5,7 +5,7 @@ import shutil
 
 from dev_app.backend.app import main
 from dev_app.backend.app.importers.veo.classifier import classify_resource, ranked_candidates, sanitize_url
-from dev_app.backend.app.importers.veo.inspector import AFTER_INTERACTIVE_PHASE, INITIAL_PHASE, activate_interactive, phase_diagnostics
+from dev_app.backend.app.importers.veo.inspector import AFTER_INTERACTIVE_PHASE, INITIAL_PHASE, activate_interactive, dismiss_membership_modal, phase_diagnostics
 from dev_app.backend.app.importers.veo.models import VeoCandidate, VeoInspection
 from dev_app.backend.app.importers.veo.service import ImportJob, VeoImportService
 from dev_app.backend.app.schemas import VeoInspectRequest
@@ -31,6 +31,7 @@ def test_default_and_interactive_discovery_phases_drive_classification_and_diagn
     tracking = classify_resource("tracking", "https://cdn.example/video.mp4?token=private", "video/mp4", discovery_phases=[INITIAL_PHASE])
     dual_lens = classify_resource("dual", "https://cdn.example/transcode-123.mp4?token=private", "video/mp4", {"width": 2048, "height": 2048}, [AFTER_INTERACTIVE_PHASE])
     calibration = classify_resource("calibration", "https://cdn.example/camera_alignment-123.veo?token=private", "application/json", discovery_phases=[AFTER_INTERACTIVE_PHASE])
+    calibration.field_length, calibration.field_width = 105, 68
     assert tracking.role == "ball_tracking" and tracking.confidence >= .9
     assert "initial/default" in " ".join(tracking.reasons)
     assert dual_lens.role == "panorama" and dual_lens.confidence >= .9
@@ -39,6 +40,7 @@ def test_default_and_interactive_discovery_phases_drive_classification_and_diagn
     diagnostics = phase_diagnostics([tracking, dual_lens, calibration], {
         "interactive_control_found": True,
         "interactive_click_succeeded": True,
+        "dom_change_summary": {"changed": True},
         "interactive_attempts": ["interactive button"],
         "menu_controls_inspected": [],
     })
@@ -52,11 +54,17 @@ def test_default_and_interactive_discovery_phases_drive_classification_and_diagn
 
 
 def test_exact_interactive_player_button_is_preferred_over_text_fallback():
+    state = {"activated": False}
+
     class Button:
         def is_visible(self, **_kwargs):
             return True
         def click(self, **_kwargs):
-            clicks.append("primary")
+            raise AssertionError("locator click must not be used for the primary button")
+        def bounding_box(self):
+            return {"x": 10, "y": 20, "width": 40, "height": 20}
+        def evaluate(self, script, *_args):
+            return {"disabled": False, "ariaDisabled": None, "className": "btn interactive-player", "display": "block", "visibility": "visible", "opacity": "1", "pointerEvents": "auto", "elementAtCenter": "button", "playerClass": "player", "playerChildCount": 2}
 
     class Locator:
         def count(self):
@@ -68,6 +76,20 @@ def test_exact_interactive_player_button_is_preferred_over_text_fallback():
         def locator(self, selector):
             selectors.append(selector)
             return Locator()
+        class Mouse:
+            def move(self, *_args): pass
+            def down(self): pass
+            def up(self): state["activated"] = True; clicks.append("mouse")
+        mouse = Mouse()
+        def wait_for_timeout(self, _milliseconds): pass
+        def evaluate(self, script):
+            if "querySelectorAll('video')" in script:
+                return [{"currentSrc": "https://cdn.example/video.mp4", "src": "", "videoWidth": 1920, "videoHeight": 1080, "readyState": 4, "paused": False, "currentTime": 1.0}]
+            if "querySelectorAll('canvas')" in script:
+                return []
+            if "performance.getEntriesByType" in script:
+                return ["https://cdn.example/transcode-id.mp4"] if state["activated"] else []
+            return []
         def get_by_role(self, *_args, **_kwargs):
             raise AssertionError("text/accessibility fallback must not run")
         def get_by_text(self, *_args, **_kwargs):
@@ -75,20 +97,27 @@ def test_exact_interactive_player_button_is_preferred_over_text_fallback():
 
     selectors, clicks, phases = [], [], []
     result = activate_interactive(Page(), lambda: phases.append(AFTER_INTERACTIVE_PHASE) or INITIAL_PHASE, phases.append)
-    assert selectors == ["button.interactive-player"]
-    assert clicks == ["primary"] and phases == [AFTER_INTERACTIVE_PHASE]
+    assert selectors and all(selector == "button.interactive-player" for selector in selectors)
+    assert clicks == ["mouse"] and phases == [AFTER_INTERACTIVE_PHASE]
     assert result["primary_selector_found"] is True
     assert result["primary_selector_count"] == 1
     assert result["primary_selector_visible"] is True
     assert result["primary_selector_click_succeeded"] is True
+    assert result["primary_selector_center_hit"] == "button"
 
 
 def test_primary_interactive_button_hidden_until_player_hover_is_retried():
+    state = {"visible": False, "activated": False}
+
     class PrimaryButton:
         def is_visible(self, **_kwargs):
             return state["visible"]
         def click(self, **_kwargs):
-            clicks.append("primary")
+            raise AssertionError("locator click must not be used")
+        def bounding_box(self):
+            return {"x": 5, "y": 5, "width": 30, "height": 20}
+        def evaluate(self, script, *_args):
+            return {"disabled": False, "ariaDisabled": None, "className": "btn interactive-player", "display": "block", "visibility": "visible", "opacity": "1", "pointerEvents": "auto", "elementAtCenter": "svg-child", "playerClass": "player", "playerChildCount": 2}
 
     class Video:
         def is_visible(self, **_kwargs):
@@ -111,6 +140,19 @@ def test_primary_interactive_button_hidden_until_player_hover_is_retried():
             if selector == "video":
                 return Locator(Video())
             raise AssertionError(f"Unexpected hover selector: {selector}")
+        class Mouse:
+            def move(self, *_args): pass
+            def down(self): pass
+            def up(self): state["activated"] = True; clicks.append("mouse")
+        mouse = Mouse()
+        def evaluate(self, script):
+            if "querySelectorAll('video')" in script:
+                return [{"currentSrc": "https://cdn.example/video.mp4", "src": "", "videoWidth": 1920, "videoHeight": 1080, "readyState": 4, "paused": False, "currentTime": 1.0}]
+            if "querySelectorAll('canvas')" in script:
+                return []
+            if "performance.getEntriesByType" in script:
+                return ["https://cdn.example/transcode-id.mp4"] if state["activated"] else []
+            return []
         def wait_for_timeout(self, _milliseconds):
             pass
         def get_by_role(self, *_args, **_kwargs):
@@ -118,12 +160,116 @@ def test_primary_interactive_button_hidden_until_player_hover_is_retried():
         def get_by_text(self, *_args, **_kwargs):
             raise AssertionError("fallback must not run")
 
-    state, clicks, phases = {"visible": False}, [], []
+    clicks, phases = [], []
     result = activate_interactive(Page(), lambda: phases.append(AFTER_INTERACTIVE_PHASE) or INITIAL_PHASE, phases.append)
-    assert clicks == ["primary"]
+    assert clicks == ["mouse"]
     assert result["primary_selector_hover_required"] is True
     assert result["primary_selector_visible"] is True
     assert result["primary_selector_click_succeeded"] is True
+    assert result["primary_selector_center_hit"] == "svg-child"
+
+
+def test_primary_interactive_does_not_use_native_dom_click_after_mouse_attempt():
+    state = {"activated": False}
+
+    class Button:
+        def is_visible(self, **_kwargs): return True
+        def bounding_box(self): return {"x": 1, "y": 1, "width": 20, "height": 20}
+        def click(self, **_kwargs): raise RuntimeError("physical fixture click produced no activation")
+        def evaluate(self, script, *_args):
+            assert "element.click" not in script
+            return {"disabled": False, "ariaDisabled": None, "className": "btn interactive-player", "display": "block", "visibility": "visible", "opacity": "1", "pointerEvents": "auto", "elementAtCenter": "button", "playerClass": "player", "playerChildCount": 2}
+
+    class Locator:
+        def count(self): return 1
+        def nth(self, _index): return Button()
+
+    class Page:
+        def locator(self, selector):
+            assert selector == "button.interactive-player"
+            return Locator()
+        class Mouse:
+            def move(self, *_args): pass
+            def down(self): pass
+            def up(self): pass
+        mouse = Mouse()
+        def wait_for_timeout(self, _milliseconds): pass
+        def evaluate(self, script):
+            if "querySelectorAll('video')" in script:
+                return [{"currentSrc": "https://cdn.example/video.mp4", "src": "", "videoWidth": 1920, "videoHeight": 1080, "readyState": 4, "paused": False, "currentTime": 1.0}]
+            if "querySelectorAll('canvas')" in script:
+                return []
+            if "performance.getEntriesByType" in script:
+                return []
+            return []
+
+    phases = []
+    result = activate_interactive(Page(), lambda: phases.append(AFTER_INTERACTIVE_PHASE) or INITIAL_PHASE, phases.append)
+    assert result["activation_method"] == "physical_mouse"
+    assert [attempt["method"] for attempt in result["click_method_attempts"]] == ["mouse"]
+    assert result["primary_selector_click_succeeded"] is True
+
+
+def test_membership_close_is_scoped_to_a_visible_membership_dialog():
+    state = {"visible": True, "clicked": False}
+
+    class CloseButton:
+        def is_visible(self, **_kwargs):
+            return True
+        def click(self, **_kwargs):
+            state["clicked"] = True
+            state["visible"] = False
+
+    class CloseLocator:
+        def count(self):
+            return 1
+        def nth(self, _index):
+            return CloseButton()
+
+    class Dialog:
+        def is_visible(self, **_kwargs):
+            return state["visible"]
+        def inner_text(self, **_kwargs):
+            return "Become a member of REAL JAEN BASE! Request membership"
+        def locator(self, selector):
+            assert selector == 'button[aria-label="x"]'
+            return CloseLocator()
+        def wait_for(self, *, state: str, **_kwargs):
+            assert state == "hidden" and not membership_state["visible"]
+
+    class DialogLocator:
+        def count(self):
+            return 1
+        def nth(self, _index):
+            return Dialog()
+
+    class Page:
+        def locator(self, selector):
+            assert selector == "[role='dialog'], dialog, [aria-modal='true']"
+            return DialogLocator()
+
+    membership_state = state
+    result = dismiss_membership_modal(Page())
+    assert result == {
+        "membership_modal_found": True,
+        "membership_modal_closed": True,
+        "membership_close_button_found": True,
+    }
+
+
+def test_interactive_confirmation_requires_both_post_interactive_assets():
+    tracking = classify_resource("tracking", "https://cdn.example/video.mp4", discovery_phases=[INITIAL_PHASE])
+    transcode = classify_resource("dual", "https://cdn.example/transcode-123.mp4", discovery_phases=[AFTER_INTERACTIVE_PHASE])
+    diagnostics = phase_diagnostics([tracking, transcode], {
+        "interactive_control_found": True,
+        "interactive_click_succeeded": True,
+        "interactive_attempts": [],
+        "menu_controls_inspected": [],
+    })
+    assert diagnostics["physical_click_succeeded"] is False
+    assert diagnostics["post_interactive_transcode_found"] is True
+    assert diagnostics["post_interactive_calibration_found"] is False
+    assert diagnostics["interactive_activation_confirmed"] is False
 
 
 def test_interactive_activation_prefers_accessibility_queries_and_supports_spanish_label():
@@ -180,6 +326,8 @@ def test_interactive_diagnostic_distinguishes_found_control_from_failed_click():
             return Locator()
         def locator(self, *_args, **_kwargs):
             return Locator()
+        def wait_for_timeout(self, _milliseconds):
+            pass
 
     phase = [INITIAL_PHASE]
     result = activate_interactive(
