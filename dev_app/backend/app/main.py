@@ -1,13 +1,14 @@
 """FastAPI service for the local Veo Match Lab.
 
-Python owns metric geometry and supplies the captured shader's uniforms.
-The browser performs native video playback and WebGL visualization only.
+Python owns validated geometry and supplies the captured shader's uniforms.
+Interactive picking also uses these uniforms locally, sharing its renderer's ray.
 """
 
 from __future__ import annotations
 
 import sys
 import os
+import math
 import uuid
 from pathlib import Path
 from typing import Annotated, Any
@@ -305,7 +306,10 @@ def tracking_point(match_id: str, payload: TrackingPointRequest) -> dict[str, An
             raise ValueError("Tracking pixel lies outside the native video.")
         point = tracking_ground_for_pixel(metadata, directions, payload.timestamp_s, payload.x, payload.y,
                                           payload.width, payload.height, tuning=DEFAULT_TRACKING_TUNING)
-        result = point.to_dict()
+        # Missing .det samples legitimately contain NaN diagnostics in the
+        # authoritative model. Keep the API JSON-safe without changing that model.
+        result = {key: None if isinstance(value, float) and not math.isfinite(value) else value
+                  for key, value in point.to_dict().items()}
         result.update({"pixel_x": payload.x, "pixel_y": payload.y,
                        "native_source_pixel": {"x": payload.x, "y": payload.y, "width": payload.width, "height": payload.height},
                        "timestamp_s": payload.timestamp_s, "distance": point.ground_distance_m,

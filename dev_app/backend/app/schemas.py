@@ -33,7 +33,7 @@ class ViewPointRequest(BaseModel):
 
 
 class TrackingPointRequest(BaseModel):
-    timestamp_s: float = Field(ge=0)
+    timestamp_s: float = Field(ge=0, allow_inf_nan=False)
     x: int = Field(ge=0)
     y: int = Field(ge=0)
     width: int = Field(gt=0, le=7680)

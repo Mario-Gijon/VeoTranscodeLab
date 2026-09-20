@@ -7,7 +7,7 @@ const Point = ({ x, z, size, color, diamond = false }: { x: number; z: number; s
   ? <rect x={x - size / 2} y={z - size / 2} width={size} height={size} fill={color} stroke="#0e1721" strokeWidth="0.5" transform={`rotate(45 ${x} ${z})`} />
   : <circle cx={x} cy={z} r={size / 2} fill={color} stroke="#0e1721" strokeWidth="0.5" />
 
-/** Visual pitch only; field coordinates and all measurement results originate in Python. */
+/** Visual pitch only; consumes canonical field coordinates from all four views. */
 export default function PitchSvg({ length, width, points }: Props) {
   const halfL = length / 2
   const halfW = width / 2

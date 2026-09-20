@@ -16,3 +16,17 @@ test('edges clamp and crop clicks use stacked coordinates', () => {
 test('letterboxed tracking clicks map to native pixels', () => {
   assert.deepEqual(nativeVideoPixel(500, 300, {left: 0, top: 0, width: 1000, height: 600}, 1920, 1080), {x: 960, y: 540})
 })
+
+test('Tracking rejects black bars and invalid sizes after resizing', () => {
+  for (const scale of [.5, 1, 2]) {
+    const bounds = { left: 20, top: 30, width: 1000 * scale, height: 1000 * scale }
+    assert.deepEqual(nativeVideoPixel(20 + 500 * scale, 30 + 500 * scale, bounds, 1920, 1080), { x: 960, y: 540 })
+    assert.equal(nativeVideoPixel(20 + 500 * scale, 30 + 10 * scale, bounds, 1920, 1080), null)
+    assert.equal(nativeVideoPixel(20 + 500 * scale, 30 + 990 * scale, bounds, 1920, 1080), null)
+  }
+  const wide = { left: 0, top: 0, width: 1000, height: 200 }
+  assert.equal(nativeVideoPixel(50, 100, wide, 1920, 1080), null)
+  assert.equal(nativeVideoPixel(950, 100, wide, 1920, 1080), null)
+  assert.equal(nativeVideoPixel(0, 0, { left: 0, top: 0, width: 0, height: 0 }, 1920, 1080), null)
+  assert.equal(nativeVideoPixel(NaN, 0, wide, 1920, 1080), null)
+})

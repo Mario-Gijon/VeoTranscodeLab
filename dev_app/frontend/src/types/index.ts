@@ -76,7 +76,7 @@ export interface GroundPoint {
   world_z: number | null
   distance: number | null
   inside_field: boolean | null
-  status: 'inside_field' | 'outside_field' | 'no_ground_intersection'
+  status: 'inside_field' | 'outside_field' | 'no_ground_intersection' | 'camera_state_unavailable' | 'ray_parallel_to_ground' | 'invalid_ground_intersection'
   landmark: string | null
   landmark_name: string | null
   expected_x: number | null
