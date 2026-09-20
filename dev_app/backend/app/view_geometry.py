@@ -8,6 +8,7 @@ import numpy as np
 
 from analysis.veo_metadata import load_veo_metadata
 from analysis.panorama_landmarks import field_landmarks
+from analysis.tracking_ground_v3 import TRACKING_ASPECT, TRACKING_FPS, logic_matrices
 
 ROOT = Path(__file__).resolve().parents[3]
 contexts: dict = {}
@@ -39,13 +40,20 @@ def view_context(calibration_path: str, tracking_available: bool = False) -> dic
             uniforms[f"distortion_{lens.name}.{name}"] = {"value": float(value)}
     identifier = uuid.uuid4().hex
     contexts[identifier] = metadata
+    tracking_geometry = {"available": tracking_available, "reason": "" if tracking_available else "Tracking field projection unavailable: camera directions missing."}
+    if tracking_available:
+        try:
+            _camera2logic, logic2camera = logic_matrices(metadata)
+            tracking_geometry.update({"logic2camera": logic2camera.flatten(order="F").tolist(), "fps": TRACKING_FPS, "aspect": TRACKING_ASPECT})
+        except (ValueError, np.linalg.LinAlgError):
+            tracking_geometry = {"available": False, "reason": "Tracking field projection unavailable: invalid calibration."}
     result = {
         "id": identifier, "uniforms": uniforms,
         "vertex_shader": (ROOT / "reference/veo_panoramic.vert.glsl").read_text(),
         "fragment_shader": (ROOT / "reference/veo_panoramic.frag.glsl").read_text(),
         "field_length": metadata.field_length, "field_width": metadata.field_width,
         "landmarks": [value.to_dict() for value in field_landmarks(metadata.field_length, metadata.field_width).values()],
-        "tracking_geometry": {"available": tracking_available, "reason": "" if tracking_available else "Tracking field projection unavailable: camera directions missing."},
+        "tracking_geometry": tracking_geometry,
     }
     keys[key] = result
     return result

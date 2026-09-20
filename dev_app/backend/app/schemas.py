@@ -15,11 +15,11 @@ class CreateMatchRequest(BaseModel):
 
 class PathImportRequest(BaseModel):
     path: str = Field(min_length=1)
-    role: Literal["tracking", "dual_lens", "camera_directions", "clip", "image", "unknown"] = "unknown"
+    role: Literal["tracking", "dual_lens", "camera_directions", "veo_highlights", "clip", "image", "unknown"] = "unknown"
 
 
 class MediaRoleRequest(BaseModel):
-    role: Literal["tracking", "dual_lens", "camera_directions", "clip", "image", "unknown"]
+    role: Literal["tracking", "dual_lens", "camera_directions", "veo_highlights", "clip", "image", "unknown"]
 
 
 class ViewPointRequest(BaseModel):

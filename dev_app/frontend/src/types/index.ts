@@ -4,7 +4,7 @@ export interface ViewContext {
   id: string; field_length: number; field_width: number; landmarks: Landmark[]
   uniforms: Record<string, { matrix?: number; value: number | number[] }>
   vertex_shader: string; fragment_shader: string
-  tracking_geometry: { available: boolean; reason: string }
+  tracking_geometry: { available: boolean; reason: string; logic2camera?: number[]; fps?: number; aspect?: number }
 }
 
 export interface Calibration {
@@ -20,7 +20,7 @@ export interface Calibration {
 
 export interface MediaItem {
   ownership?: 'managed' | 'external'
-  role?: 'tracking' | 'dual_lens' | 'camera_directions' | 'clip' | 'image' | 'unknown'
+  role?: 'tracking' | 'dual_lens' | 'camera_directions' | 'veo_highlights' | 'clip' | 'image' | 'unknown'
   size_bytes?: number
   id: string
   name: string

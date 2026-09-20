@@ -121,7 +121,7 @@ class VeoImportService:
                     raise InterruptedError("Import cancelled.")
                 assert candidate is not None
                 asset = job.assets.setdefault(role, {"status": "waiting", "bytes_downloaded": 0, "bytes_total": None, "filename": candidate.filename})
-                media_role = "dual_lens" if role == "panorama" else "tracking" if role == "ball_tracking" else "camera_directions"
+                media_role = "dual_lens" if role == "panorama" else "tracking" if role == "ball_tracking" else "veo_highlights" if role == "veo_highlights" else "camera_directions"
                 existing = match.get("calibration") if role == "calibration" else next((item for item in match["media"] if item.get("role") == media_role), None)
                 if existing and Path(existing["path"]).is_file():
                     if role == "calibration":

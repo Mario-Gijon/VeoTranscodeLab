@@ -117,7 +117,7 @@ def validate_media_role(media: dict, role: str) -> None:
         if media.get("kind") != "resource" or not str(media.get("name", "")).lower().endswith("detections_constrained.det"):
             raise ValueError("Choose a detections_constrained.det resource for Camera Directions.")
         return
-    if role in {"tracking", "dual_lens", "clip"} and media["kind"] not in {"video", "clip"}:
+    if role in {"tracking", "dual_lens", "veo_highlights", "clip"} and media["kind"] not in {"video", "clip"}:
         raise ValueError("Choose a video for this role.")
     if role == "dual_lens" and (media["width"], media["height"]) != (2048, 2048):
         raise ValueError("The validated dual-lens input must be 2048×2048.")

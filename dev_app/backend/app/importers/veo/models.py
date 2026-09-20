@@ -12,13 +12,13 @@ def importable(candidate: VeoCandidate) -> bool:
     path = urlsplit(candidate.url).path.lower()
     if candidate.role == "calibration":
         return path.endswith(".veo") and candidate.field_length is not None and candidate.field_width is not None
-    if candidate.role == "ball_tracking" and not (candidate.filename.lower() == "video.mp4" and "initial" in candidate.discovery_phases):
+    if candidate.role == "ball_tracking" and not (candidate.filename.lower() == "video.mp4" and "initial" in candidate.discovery_phases) and "explicit Standard/Follow video metadata" not in candidate.reasons:
         return False
     if candidate.role == "panorama" and not (candidate.filename.lower().startswith("transcode-") and "after_interactive" in candidate.discovery_phases):
         return False
     if candidate.role == "camera_directions":
         return path.endswith("detections_constrained.det")
-    return candidate.role in {"ball_tracking", "panorama"} and path.endswith(".mp4")
+    return candidate.role in {"ball_tracking", "panorama", "veo_highlights"} and path.endswith(".mp4")
 
 
 @dataclass
@@ -63,7 +63,7 @@ class VeoInspection:
 
     def public_dict(self) -> dict[str, Any]:
         resolved = {}
-        for role in ("ball_tracking", "panorama", "calibration", "camera_directions"):
+        for role in ("ball_tracking", "panorama", "calibration", "camera_directions", "veo_highlights"):
             choices = sorted((item for item in self.candidates if item.role == role and importable(item)), key=lambda item: item.confidence, reverse=True)
             if choices:
                 resolved[role] = choices[0].identifier

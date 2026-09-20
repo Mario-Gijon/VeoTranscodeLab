@@ -39,7 +39,7 @@ def classify_resource(
     content = (content_type or "").lower()
     phases = list(dict.fromkeys(discovery_phases or []))
     reasons: list[str] = []
-    score = {"panorama": 0.0, "ball_tracking": 0.0, "calibration": 0.0, "camera_directions": 0.0, "manifest": 0.0}
+    score = {"panorama": 0.0, "ball_tracking": 0.0, "veo_highlights": 0.0, "calibration": 0.0, "camera_directions": 0.0, "manifest": 0.0}
     if name.lower() == "detections_constrained.det" or name.lower().endswith("/detections_constrained.det"):
         score["camera_directions"] = 1.0
         reasons.append("Veo constrained camera-directions resource")
@@ -49,6 +49,8 @@ def classify_resource(
         score["panorama"] += 0.55; reasons.append("panorama/transcode path signal")
     if any(term in lower for term in ("ball_tracking", "ball-tracking", "follow_camera", "follow-camera", "followcam")):
         score["ball_tracking"] += 0.75; reasons.append("ball-tracking/follow-camera path signal")
+    if any(term in lower for term in ("highlights", "highlight", "veo_generated")):
+        score["veo_highlights"] = 1.0; reasons.append("Veo highlights compilation path signal")
     if "initial" in phases and name.lower() == "video.mp4":
         score["ball_tracking"] += 0.9; reasons.append("video.mp4 discovered in the initial/default player view")
     if "after_interactive" in phases and name.lower().startswith("transcode-") and name.lower().endswith(".mp4"):
@@ -63,6 +65,8 @@ def classify_resource(
     if width == 2048 and height == 2048:
         score["panorama"] += 0.4; reasons.append("2048×2048 square-video signal")
     role, confidence = max(score.items(), key=lambda item: item[1])
+    if score["veo_highlights"]:
+        role, confidence = "veo_highlights", score["veo_highlights"]
     if confidence < 0.2:
         role = "unknown"
     if score["manifest"]:

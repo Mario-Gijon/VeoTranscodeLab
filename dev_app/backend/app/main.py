@@ -386,7 +386,7 @@ def upload_media(match_id: str, file: Annotated[UploadFile, File(...)], role: An
     save_upload(file, destination)
     try:
         record = media_record(destination, name=Path(file.filename).name, source="upload", kind="resource" if role == "camera_directions" else None)
-        if role not in {"tracking", "dual_lens", "camera_directions", "clip", "image", "unknown"}:
+        if role not in {"tracking", "dual_lens", "camera_directions", "veo_highlights", "clip", "image", "unknown"}:
             raise ValueError("Unknown media role")
         if role == "camera_directions":
             if suffix != ".det":

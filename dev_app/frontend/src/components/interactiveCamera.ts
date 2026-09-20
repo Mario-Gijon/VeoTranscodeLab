@@ -36,7 +36,7 @@ export function wheelCamera(camera: InteractiveCamera, delta: number) {
 export function isDrag(dx: number, dy: number) { return Math.hypot(dx, dy) >= DRAG_THRESHOLD }
 
 // All matrices are column-major, exactly as supplied to WebGL by view_context.
-function multiply(a: number[], b: number[]) {
+export function multiplyMatrix(a: number[], b: number[]) {
   return Array.from({ length: 16 }, (_, i) => {
     const row = i % 4, col = Math.floor(i / 4)
     return [0, 1, 2, 3].reduce((sum, k) => sum + a[k * 4 + row] * b[col * 4 + k], 0)
@@ -48,8 +48,31 @@ export function interactiveTransform(context: ViewContext, camera: InteractiveCa
   const cy = Math.cos(lon), sy = Math.sin(lon), cx = Math.cos(lat), sx = Math.sin(lat)
   const ry = [cy, 0, -sy, 0, 0, 1, 0, 0, sy, 0, cy, 0, 0, 0, 0, 1]
   const rx = [1, 0, 0, 0, 0, cx, sx, 0, 0, -sx, cx, 0, 0, 0, 0, 1]
-  return multiply(multiply(context.uniforms.camera2world.value as number[],
-    context.uniforms.camera2presentation.value as number[]), multiply(ry, rx))
+  return multiplyMatrix(multiplyMatrix(context.uniforms.camera2world.value as number[],
+    context.uniforms.camera2presentation.value as number[]), multiplyMatrix(ry, rx))
+}
+
+export function inverseMatrix(matrix: number[]): number[] | null {
+  const a = Array.from({ length: 4 }, (_, row) => Array.from({ length: 8 }, (_, col) => col < 4 ? matrix[col * 4 + row] : col - 4 === row ? 1 : 0))
+  for (let col = 0; col < 4; col++) {
+    const pivot = Array.from({ length: 4 - col }, (_, i) => i + col).reduce((best, row) => Math.abs(a[row][col]) > Math.abs(a[best][col]) ? row : best, col)
+    if (!Number.isFinite(a[pivot][col]) || Math.abs(a[pivot][col]) < 1e-12) return null
+    ;[a[col], a[pivot]] = [a[pivot], a[col]]
+    const value = a[col][col]; for (let j = 0; j < 8; j++) a[col][j] /= value
+    for (let row = 0; row < 4; row++) if (row !== col) { const scale = a[row][col]; for (let j = 0; j < 8; j++) a[row][j] -= scale * a[col][j] }
+  }
+  return Array.from({ length: 16 }, (_, i) => a[i % 4][4 + Math.floor(i / 4)])
+}
+
+export function projectGroundPoint(viewToWorld: number[], fov: number, aspect: number, x: number, z: number) {
+  const worldToView = inverseMatrix(viewToWorld)
+  if (!worldToView || ![fov, aspect, x, z].every(Number.isFinite)) return null
+  const point = [x, 0, z, 1]
+  const view = [0, 1, 2, 3].map(row => point.reduce((sum, value, col) => sum + worldToView[col * 4 + row] * value, 0))
+  const depth = view[2], height = 2 * Math.tan(fov / 2), viewportWidth = height * aspect
+  if (!(depth > 1e-9) || ![...view, height, viewportWidth].every(Number.isFinite)) return null
+  const u = .5 + view[0] / depth / viewportWidth, v = .5 + view[1] / depth / height
+  return u >= 0 && u <= 1 && v >= 0 && v <= 1 ? { u, v } : null
 }
 
 /** Same pixel-center and top/bottom conventions as Panorama. No .det involved. */

@@ -2,7 +2,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dragCamera, initialCamera, interactiveGroundPoint, interactiveRay, interactiveShader, isDrag, MAX_FOV, MIN_FOV, PITCH_LIMIT, safeCamera, wheelCamera } from '../src/components/interactiveCamera.ts'
-import { appendMeasurement, matchTimestamp, selectedPitchPoints, VIEW_MODES } from '../src/components/workspaceGeometry.ts'
+import { appendMeasurement, canSelect, matchTimestamp, selectedPitchPoints, VIEW_MODES } from '../src/components/workspaceGeometry.ts'
+import { cameraDirectionAtTime, parseCameraDirections, projectTrackingGroundPoint } from '../src/components/trackingOverlay.ts'
+import { projectGroundPoint, interactiveTransform } from '../src/components/interactiveCamera.ts'
 import { nativeVideoPixel } from '../src/components/viewCoordinates.ts'
 
 const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
@@ -94,4 +96,34 @@ test('Interactive shader retains captured Panorama branch and all lens projectio
   assert.ok(extended.endsWith(source.slice(source.indexOf('  blend_target_point = inverse'))))
   assert.match(extended, /interactive_enabled > 0.5 && abs\(worldspace_projection_dir.y\) < 0.000001/)
   assert.match(extended, /interactive_to_world \* vec4\(view_ray, 0.0\)/)
+})
+test('shared Select gate preserves pitch history while disabling visual selection in every view', () => {
+  const point = interactiveGroundPoint(context, camera, 50, 50, 101, 101)
+  const history = appendMeasurement([], { ...point, view: 'panorama' })
+  for (const view of VIEW_MODES) {
+    assert.equal(canSelect(false, true), false, view)
+    assert.equal(canSelect(true, false), false, view)
+    assert.equal(selectedPitchPoints(history)[0].world_z, point.world_z, view)
+  }
+  assert.equal(canSelect(true, true), true)
+})
+test('Interactive world anchor forward-projection follows camera movement, zoom and visibility', () => {
+  const stable = { measured_x: 0, measured_z: 10 }
+  const initial = projectGroundPoint(interactiveTransform(context, camera), camera.fov, 16 / 9, stable.measured_x, stable.measured_z)
+  close(initial.u, .5); close(initial.v, .5)
+  const panned = projectGroundPoint(interactiveTransform(context, { ...camera, longitude: .2 }), camera.fov, 16 / 9, stable.measured_x, stable.measured_z)
+  assert.ok(panned.u < .5)
+  const zoomed = projectGroundPoint(interactiveTransform(context, camera), .5, 16 / 9, 5, 10)
+  const wide = projectGroundPoint(interactiveTransform(context, camera), 1.2, 16 / 9, 5, 10)
+  assert.ok(zoomed.u > wide.u)
+  assert.equal(projectGroundPoint(interactiveTransform(context, { ...camera, longitude: Math.PI }), camera.fov, 16 / 9, 0, 10), null)
+})
+test('Tracking forward projection uses current .det row and hides outside the viewport', () => {
+  const samples = parseCameraDirections('0,0.7853981633974483,1,0\n0.4,0.7853981633974483,1,0')
+  assert.deepEqual(cameraDirectionAtTime(samples, 0, 30), samples[0]); assert.deepEqual(cameraDirectionAtTime(samples, 2 / 30, 30), samples[1])
+  const trackingContext = { ...context, tracking_geometry: { available: true, reason: '', logic2camera: identity, fps: 30, aspect: 16 / 9 } }
+  const first = projectTrackingGroundPoint(trackingContext, samples, 0, 0, 10)
+  const second = projectTrackingGroundPoint(trackingContext, samples, 2 / 30, 0, 10)
+  close(first.u, .5); assert.notEqual(first.u, second.u)
+  assert.equal(projectTrackingGroundPoint(trackingContext, samples, 0, 1000, 10), null)
 })

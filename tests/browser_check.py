@@ -142,6 +142,8 @@ def main():
                     det.write_text(f'{yaw},{pitch},1,0\n' * 60)
                     response = request.post(f"http://127.0.0.1:8005/api/matches/{match['id']}/media/path", data={'path': str(det), 'role': 'camera_directions'})
                     assert response.status == 201
+                    response = request.post(f"http://127.0.0.1:8005/api/matches/{match['id']}/media/path", data={'path': str(clip), 'role': 'veo_highlights'})
+                    assert response.status == 201
                     page.reload()
                     captures = Path(os.environ['VEO_UI_CAPTURE_DIR']) if os.environ.get('VEO_UI_CAPTURE_DIR') else None
                     if captures:
@@ -162,6 +164,10 @@ def main():
                     assert page.evaluate("window.originalVideo === document.querySelector('video') && window.originalCanvas === document.querySelector('canvas[aria-label=\"Interactive view\"]')")
                     assert abs(page.locator('video').evaluate('(v) => v.currentTime') - 1.2) < .02
                     assert page.locator('video').count() == 1
+                    page.get_by_role('button', name='View Veo highlights', exact=True).click()
+                    page.get_by_role('dialog').wait_for()
+                    assert page.get_by_role('dialog').locator('video[controls]').count() == 1
+                    page.get_by_role('button', name='Close', exact=True).click()
                     # Find a deterministic in-field click using the production
                     # projection, then confirm the real pointer path selects it.
                     click = page.evaluate('''async (context) => {
@@ -180,6 +186,17 @@ def main():
                     marker = page.locator('svg[aria-label="Pitch reference"] circle[fill="#ffcf4a"]')
                     assert marker.count() == 1
                     assert abs(float(marker.get_attribute('cx')) - click['point']['world_x']) < 1e-6
+                    page.get_by_role('button', name='Select', exact=True).click()
+                    assert page.get_by_label('Projected pitch marker').count() == 0
+                    interactive.click(position={'x': click['x'], 'y': click['y']})
+                    assert page.get_by_role('button', name='Measurements · 1 points').count() == 1
+                    before = interactive.evaluate('(c) => c.toDataURL()')
+                    box = interactive.bounding_box()
+                    page.mouse.move(box['x'] + box['width']/2, box['y'] + box['height']/2)
+                    page.mouse.down(); page.mouse.move(box['x'] + box['width']/2 + 40, box['y'] + box['height']/2, steps=4); page.mouse.up()
+                    page.wait_for_function("old => document.querySelector('canvas[aria-label=\"Interactive view\"]').toDataURL() !== old", arg=before)
+                    assert marker.count() == 1
+                    page.get_by_role('button', name='Select', exact=True).click()
                     before = interactive.evaluate('(c) => c.toDataURL()')
                     box = interactive.bounding_box()
                     page.mouse.move(box['x'] + box['width']/2, box['y'] + box['height']/2)

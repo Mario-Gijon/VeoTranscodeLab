@@ -24,3 +24,7 @@ export function appendMeasurement(points: GroundPoint[], point: GroundPoint) {
     && (!validPitchPoint(point) || point.status !== 'inside_field')) return points
   return [...points, { ...point, point_index: points.length + 1 }]
 }
+
+export function canSelect(selectionEnabled: boolean, isValidGround: boolean) {
+  return selectionEnabled && isValidGround
+}

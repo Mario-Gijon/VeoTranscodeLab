@@ -6,7 +6,7 @@ import json
 
 from dev_app.backend.app import main
 from dev_app.backend.app.importers.veo.classifier import classify_resource, ranked_candidates, sanitize_url
-from dev_app.backend.app.importers.veo.inspector import AFTER_INTERACTIVE_PHASE, INITIAL_PHASE, activate_interactive, bounded_json_response, camera_directions_for_tracking, dismiss_membership_modal, phase_diagnostics, resource_links, standard_video_camera_directions
+from dev_app.backend.app.importers.veo.inspector import AFTER_INTERACTIVE_PHASE, INITIAL_PHASE, activate_interactive, bounded_json_response, camera_directions_for_tracking, dismiss_membership_modal, generated_highlights_videos, phase_diagnostics, resource_links, selected_tracking_resource, standard_follow_videos, standard_video_camera_directions
 from dev_app.backend.app.importers.veo.models import VeoCandidate, VeoInspection, importable
 from dev_app.backend.app.importers.veo.service import ImportJob, VeoImportService
 from dev_app.backend.app.schemas import VeoInspectRequest
@@ -68,6 +68,44 @@ def test_camera_directions_are_taken_from_the_selected_standard_tracking_video()
     assert camera_directions_for_tracking(resources, [(url, det, INITIAL_PHASE) for url, det in pairs]) == (tracking, directions)
     # URL availability follows the explicit field; no replacement or render guessing.
     assert directions in resource_links(videos)
+
+
+def test_structured_standard_video_beats_incidental_video_mp4_and_keeps_its_own_det():
+    highlights = "https://c.veocdn.com/match/highlights/video.mp4"
+    tracking = "https://c.veocdn.com/match/standard/machine/45635d64/video.mp4"
+    directions = "https://c.veocdn.com/match/standard/machine/45635d64/detections_constrained.det"
+    videos = {"videos": [{"url": highlights, "render_type": "highlight", "camera_directions": None},
+                           {"url": tracking, "render_type": "follow", "camera_directions": directions}]}
+    structured = standard_follow_videos(videos)
+    assert structured == [(tracking, directions)]
+    resources = {highlights: {"url": highlights, "phases": [INITIAL_PHASE]}, tracking: {"url": tracking, "phases": [INITIAL_PHASE]}}
+    assert selected_tracking_resource(resources, structured) == tracking
+    assert camera_directions_for_tracking(resources, [(tracking, directions, INITIAL_PHASE)], structured) == (tracking, directions)
+    highlight_candidate = classify_resource("highlights", highlights, "video/mp4", discovery_phases=[INITIAL_PHASE])
+    assert highlight_candidate.role == "veo_highlights" and importable(highlight_candidate)
+
+
+def test_optional_highlights_coexist_with_required_import_assets(tmp_path, monkeypatch):
+    manager = VeoImportService(WorkspaceStore(tmp_path), tmp_path)
+    candidates = [
+        classify_resource("tracking", "https://cdn.example/video.mp4", discovery_phases=[INITIAL_PHASE]),
+        classify_resource("highlights", "https://cdn.example/highlights.mp4"),
+        classify_resource("panorama", "https://cdn.example/transcode-1.mp4", discovery_phases=[AFTER_INTERACTIVE_PHASE]),
+        classify_resource("calibration", "https://cdn.example/camera_alignment.veo", discovery_phases=[AFTER_INTERACTIVE_PHASE]),
+    ]
+    candidates[3].field_length, candidates[3].field_width = 105, 68
+    inspection = VeoInspection("optional", "https://app.veo.co/matches/x", "https://app.veo.co/matches/x", candidates=candidates)
+    assert "veo_highlights" in inspection.public_dict()["resolved_assets"]
+    manager._inspections[inspection.identifier] = inspection
+    monkeypatch.setattr(manager, "_run_import", lambda _job: None)
+    resolved = inspection.public_dict()["resolved_assets"]
+    job = manager.start_import(inspection.identifier, resolved)
+    assert job.selected_assets["veo_highlights"] == "highlights"
+
+
+def test_generated_highlights_metadata_detects_a_generic_video_url():
+    url = "https://c.veocdn.com/match/generated/video.mp4"
+    assert generated_highlights_videos({"results": [{"is_ai_generated": True, "video": {"url": url}}]}) == [url]
 
 
 def test_camera_directions_missing_for_selected_tracking_and_direct_network_fallback():
