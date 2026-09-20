@@ -23,7 +23,7 @@ export default function ManageFilesDialog({ match, calibrations, onClose, onUpda
   }
   const replace = (action: () => Promise<unknown>) => {
     const exists = role === 'calibration' ? !!match.calibration : ['tracking', 'dual_lens'].includes(role) && match.media.some((item) => item.role === role)
-    if (exists) setConfirmation({ title: `Replace ${resourceRoles.find(([id]) => id === role)?.[1]}?`, action })
+    if (exists) setConfirmation({ title: `¿Sustituir ${resourceRoles.find(([id]) => id === role)?.[1]}?`, action })
     else void run(action)
   }
   const upload = (file: File) => replace(() => role === 'calibration' ? api.uploadCalibration(match.id, file) : api.uploadMedia(match.id, file, role))

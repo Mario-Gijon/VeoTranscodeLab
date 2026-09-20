@@ -58,7 +58,7 @@ export default function WorkspacePage({ matchId, calibrations, onBack }: Props) 
   }, [loadedMatchId, selectedCalibrationPath, directionsId])
   const run = async (work: () => Promise<unknown>) => {
     setBusy(true); setError('')
-    try { await work() } catch (reason) { setError(reason instanceof Error ? reason.message : 'Operation failed') }
+    try { await work() } catch (reason) { setError(reason instanceof Error ? reason.message : 'La operación ha fallado.') }
     finally { setBusy(false) }
   }
   const roleMedia = match?.media.filter((item) => mode === 'tracking' ? item.role === 'tracking' : item.role === 'dual_lens') ?? []
@@ -96,9 +96,9 @@ export default function WorkspacePage({ matchId, calibrations, onBack }: Props) 
         : await api.viewPoint(context.id, mode, x, y, mode === 'dual_lens' ? 2048 : width, mode === 'dual_lens' ? 2048 : width * 9 / 16, landmark || null)
       if (!result || generation.current !== currentGeneration || sequence !== measurementSequence.current) return
       setPoints((items) => appendMeasurement(items, { ...result, timestamp_s: timestamp, view: mode, view_width: width, media_id: frameRender?.id ?? source?.id }))
-    } catch (e) { if (mode !== 'tracking' && mode !== 'interactive') setError(e instanceof Error ? e.message : 'Measurement failed') }
+    } catch (e) { if (mode !== 'tracking' && mode !== 'interactive') setError(e instanceof Error ? e.message : 'No se pudo medir el punto.') }
   }
-  if (!match) return <Typography sx={{ p: 3 }}>{error || 'Loading match…'}</Typography>
+  if (!match) return <Typography sx={{ p: 3 }}>{error || 'Cargando partido…'}</Typography>
   const displayPoints = points.filter((point) => point.view === mode && point.media_id === (frameRender?.id ?? source?.id) && (mode === 'tracking' || point.view_width === width))
   return <Box sx={{ p: { xs: 1, md: 2 } }}>
     <Stack direction="row" alignItems="center" gap={2} mb={1}><Button onClick={onBack}>← Partidos</Button><Typography variant="h6">{match.name}</Typography><Box flex={1} /><Button variant="outlined" size="small" onClick={() => setFilesOpen(true)}>Gestionar archivos</Button></Stack>
@@ -114,12 +114,12 @@ export default function WorkspacePage({ matchId, calibrations, onBack }: Props) 
     </Stack>
     <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 7fr) minmax(280px, 3fr)' }, gap: 2 }}>
       <Box minWidth={0}>
-        {stillImage ? <Box><img src={api.url(stillImage.url)} alt={stillImage.name} style={{ width: '100%', maxHeight: '65vh', objectFit: 'contain' }} /><Typography variant="caption">{stillImage.name} · Vista previa de imagen. Usa Renderizar fotograma para un fotograma apilado calibrado.</Typography><Button onClick={() => setStillImage(null)}>Volver al vídeo</Button></Box> : frameRender ? <PanoramaViewer panorama={frameRender} points={selectionEnabled ? displayPoints : []} onPixelClick={(x, y) => selectionEnabled && void measure(x, y)} /> : source && (!['panorama', 'interactive'].includes(mode) || context) ? <MatchViewer key={source.id} media={source} mode={mode} crop={crop} context={context} width={width} initialTime={time} videoRef={video} cameraRef={interactiveCamera} onTime={setTime} onPlayback={setPlaying} points={selectionEnabled ? displayPoints : []} selectionEnabled={selectionEnabled} trackingAvailable={!!context?.tracking_geometry.available} onClick={(x, y, pick) => void measure(x, y, pick)} /> : <Alert severity="info">{['panorama', 'interactive'].includes(mode) && !context ? 'Añade una calibración para activar esta vista.' : 'Añade el vídeo fuente en Gestionar archivos para usar esta vista.'}</Alert>}
+        {stillImage ? <Box><img src={api.url(stillImage.url)} alt={stillImage.name} style={{ width: '100%', maxHeight: '65vh', objectFit: 'contain' }} /><Typography variant="caption">{stillImage.name} · Vista previa de imagen.</Typography><Button onClick={() => setStillImage(null)}>Volver al vídeo</Button></Box> : frameRender ? <PanoramaViewer panorama={frameRender} points={selectionEnabled ? displayPoints : []} onPixelClick={(x, y) => selectionEnabled && void measure(x, y)} /> : source && (!['panorama', 'interactive'].includes(mode) || context) ? <MatchViewer key={source.id} media={source} mode={mode} crop={crop} context={context} width={width} initialTime={time} videoRef={video} cameraRef={interactiveCamera} onTime={setTime} onPlayback={setPlaying} points={selectionEnabled ? displayPoints : []} selectionEnabled={selectionEnabled} trackingAvailable={!!context?.tracking_geometry.available} onClick={(x, y, pick) => void measure(x, y, pick)} /> : <Alert severity="info">{['panorama', 'interactive'].includes(mode) && !context ? 'Añade una calibración para activar esta vista.' : 'Añade el vídeo fuente en Gestionar archivos para usar esta vista.'}</Alert>}
         <Stack direction="row" alignItems="center" gap={1} mt={1} flexWrap="wrap">
           <Tooltip title="Retroceder 10 segundos"><span><IconButton aria-label="Retroceder 10 segundos" disabled={playbackDisabled} onClick={() => { video.current?.pause(); seek(time - 10) }}><Replay10Icon /></IconButton></span></Tooltip>
           <Tooltip title={playing ? 'Pausar' : 'Reproducir'}><span><IconButton aria-label={playing ? 'Pausar' : 'Reproducir'} disabled={playbackDisabled} onClick={() => { if (video.current?.paused) void video.current.play().catch((e: Error) => setError(e.message)); else video.current?.pause() }}>{playing ? <PauseIcon /> : <PlayArrowIcon />}</IconButton></span></Tooltip>
           <Tooltip title="Avanzar 10 segundos"><span><IconButton aria-label="Avanzar 10 segundos" disabled={playbackDisabled} onClick={() => { video.current?.pause(); seek(time + 10) }}><Forward10Icon /></IconButton></span></Tooltip>
-          <Typography variant="body2" sx={{ minWidth: 112, fontVariantNumeric: 'tabular-nums' }}>{formatMediaTime(time)} / {formatMediaTime(duration)}</Typography>
+          <Typography aria-label="Tiempo del vídeo" variant="body2" sx={{ minWidth: 112, fontVariantNumeric: 'tabular-nums' }}>{formatMediaTime(time)} / {formatMediaTime(duration)}</Typography>
           {frameRender && <Button onClick={() => { setFrameRender(null); generation.current++ }}>Volver al vídeo</Button>}
         </Stack><Slider aria-label="Línea de tiempo del partido" value={Math.min(time, duration)} max={duration || 1} step={source?.fps ? 1 / source.fps : .04} disabled={playbackDisabled} onChange={(_, value) => seek(value as number)} />
       </Box>
@@ -128,6 +128,6 @@ export default function WorkspacePage({ matchId, calibrations, onBack }: Props) 
         <Button onClick={() => { setPoints([]); generation.current++ }}>Borrar puntos</Button>
       </Box>
     </Box>{points.length > 0 && <><Divider sx={{ my: 1 }} /><Accordion disableGutters><AccordionSummary>Mediciones · {points.length} puntos</AccordionSummary><AccordionDetails><ValidationTable points={points} /></AccordionDetails></Accordion></>}
-    {highlights && <Dialog open={highlightsOpen} onClose={() => { highlightsVideo.current?.pause(); setHighlightsOpen(false) }} fullWidth maxWidth="lg"><DialogTitle>Highlights de Veo</DialogTitle><DialogContent><video ref={highlightsVideo} controls preload="metadata" src={api.url(highlights.url)} style={{ width: '100%', maxHeight: '70vh', background: '#080a0c' }} /></DialogContent><DialogActions><Button onClick={() => { highlightsVideo.current?.pause(); setHighlightsOpen(false) }}>Cerrar</Button></DialogActions></Dialog>}
+    {highlights && <Dialog open={highlightsOpen} onClose={() => { highlightsVideo.current?.pause(); setHighlightsOpen(false) }} fullWidth maxWidth="lg"><DialogTitle>Vídeos destacados de Veo</DialogTitle><DialogContent><video ref={highlightsVideo} controls preload="metadata" src={api.url(highlights.url)} style={{ width: '100%', maxHeight: '70vh', background: '#080a0c' }} /></DialogContent><DialogActions><Button onClick={() => { highlightsVideo.current?.pause(); setHighlightsOpen(false) }}>Cerrar</Button></DialogActions></Dialog>}
   </Box>
 }

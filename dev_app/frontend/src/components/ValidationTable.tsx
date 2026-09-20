@@ -10,7 +10,7 @@ const statusLabel = (status: GroundPoint['status']) => ({ inside_field: 'dentro 
 export default function ValidationTable({ points }: { points: GroundPoint[] }) {
   const stats = validationStatistics(points)
   return <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
-    {stats.n > 0 && <Typography variant="body2" sx={{ px: 1.5, pt: 1 }}>Landmarks n={stats.n} · median {stats.median!.toFixed(3)} m · RMS {stats.rms!.toFixed(3)} m · max {stats.max!.toFixed(3)} m · mean ΔX {stats.meanDeltaX!.toFixed(3)} m · mean ΔZ {stats.meanDeltaZ!.toFixed(3)} m</Typography>}
+    {stats.n > 0 && <Typography variant="body2" sx={{ px: 1.5, pt: 1 }}>Hitos (n={stats.n}) · mediana {stats.median!.toFixed(3)} m · RMS {stats.rms!.toFixed(3)} m · máx. {stats.max!.toFixed(3)} m · media ΔX {stats.meanDeltaX!.toFixed(3)} m · media ΔZ {stats.meanDeltaZ!.toFixed(3)} m</Typography>}
     <Stack direction="row" justifyContent="space-between" alignItems="center" p={1.5} gap={1} flexWrap="wrap">
       <Typography variant="subtitle1" fontWeight={700}>Puntos de validación</Typography>
       <Stack direction="row" gap={.75}><Chip size="small" label={`${points.length} seleccionados`} /><Chip size="small" color="secondary" label={stats.mean === null ? 'Sin error de hito' : `Error medio ${stats.mean.toFixed(2)} m`} /></Stack>

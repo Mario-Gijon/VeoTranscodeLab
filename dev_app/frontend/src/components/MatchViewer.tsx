@@ -184,7 +184,7 @@ export default function MatchViewer({ media, mode, crop, context, width, videoRe
           aspectRatio: '16 / 9', height: mode === 'interactive' ? 'auto' : undefined, maxHeight: mode === 'interactive' ? '65vh' : undefined }} />
       <canvas ref={raw} aria-label="Vista de doble lente" width={2048} height={crop === 'stacked' ? 2048 : 1024}
         style={{ width: '100%', display: mode === 'dual_lens' ? 'block' : 'none', background: '#080a0c' }} />
-      {selectionEnabled && mode !== 'interactive' && <svg viewBox={`0 0 ${outputWidth} ${outputHeight}`} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+      {selectionEnabled && mode !== 'interactive' && <svg aria-label={mode === 'dual_lens' ? 'Marcadores de doble lente' : 'Marcadores panorámicos'} viewBox={`0 0 ${outputWidth} ${outputHeight}`} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
         {points.map((point) => {
           const y = point.pixel_y - (mode === 'dual_lens' && crop === 'right' ? 1024 : 0)
           if (y < 0 || y >= outputHeight) return null

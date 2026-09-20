@@ -926,9 +926,13 @@ def inspect_match(match_url: str, diagnostics_dir: Path) -> VeoInspection:
                     for video_url, directions_url in standard_follow_videos(payload):
                         metadata_tracking_videos.append((video_url, directions_url))
                         record_resource(video_url, None, phase)
-                for video_url in generated_highlights_videos(payload):
-                    metadata_highlights_videos.append(video_url)
-                    record_resource(video_url, None, phase)
+                response_path = urlsplit(response.url).path.rstrip("/").lower()
+                # Only match-owned video/highlight metadata can identify a Veo reel.
+                # Arbitrary captured JSON and individual event clips are not enough.
+                if response_path.endswith(("/videos", "/highlights")):
+                    for video_url in generated_highlights_videos(payload):
+                        metadata_highlights_videos.append(video_url)
+                        record_resource(video_url, None, phase)
                 if isinstance(payload, dict) and isinstance(payload.get("match"), dict):
                     for key in ("title", "date", "home_team", "away_team"):
                         if isinstance(payload["match"].get(key), str):

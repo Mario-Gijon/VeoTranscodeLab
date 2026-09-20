@@ -103,6 +103,11 @@ def test_initial_default_player_current_src_wins_over_nested_and_post_interactiv
 def test_generated_highlights_metadata_detects_a_generic_video_url():
     url = "https://c.veocdn.com/match/generated/video.mp4"
     assert generated_highlights_videos({"results": [{"is_ai_generated": True, "video": {"url": url}}]}) == []
+    captured_individual_clips = [
+        {"type": "goal", "is_ai_generated": True, "videos": [{"url": url}]},
+        {"type": "shot_on_goal", "is_ai_generated": True, "videos": [{"url": url}]},
+    ]
+    assert generated_highlights_videos(captured_individual_clips) == []
 
 
 def test_explicit_highlights_compilation_metadata_is_eligible_but_individual_clip_is_not():
