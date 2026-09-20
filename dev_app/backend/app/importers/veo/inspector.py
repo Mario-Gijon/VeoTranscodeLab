@@ -807,6 +807,8 @@ def inspect_match(match_url: str, diagnostics_dir: Path) -> VeoInspection:
             if _is_relevant_resource(response.url):
                 network_events.append({"kind": "response", "url": sanitize_url(response.url), "status": response.status, "phase": phase})
             if response.status not in {200, 206}:
+                if "json" in (content or "") or response.status in {401, 403, 404}:
+                    structured.observe_json(response.url, None, phase, status_code=response.status)
                 return
             record_resource(response.url, content, phase)
             size = response.headers.get("content-length", "")
@@ -817,7 +819,7 @@ def inspect_match(match_url: str, diagnostics_dir: Path) -> VeoInspection:
             if content and "json" in content and size.isdigit() and int(size) <= 2_000_000:
                 try:
                     payload = response.json()
-                    structured.observe_json(response.url, payload, phase)
+                    structured.observe_json(response.url, payload, phase, status_code=response.status)
                     for link in resource_links(payload, limit=MAX_RESOURCES):
                         record_resource(link, None, phase)
                     for video_url, directions_url in standard_video_camera_directions(payload):
@@ -1019,6 +1021,13 @@ def inspect_match(match_url: str, diagnostics_dir: Path) -> VeoInspection:
             else None
         ),
     )
+    interaction_confirmed = bool(inspection.interaction.get("interactive_activation_confirmed"))
+    structured.record_interactive(interaction_confirmed, {
+        "button_selector": PRIMARY_INTERACTIVE_SELECTOR,
+        "physical_click_succeeded": inspection.interaction.get("physical_click_succeeded", False),
+        "post_interactive_transcode_found": inspection.interaction.get("post_interactive_transcode_found", False),
+        "post_interactive_calibration_found": inspection.interaction.get("post_interactive_calibration_found", False),
+    })
     assets = {"tracking": None, "dual_lens": None, "calibration": None, "camera_directions": None}
     for candidate in candidates:
         role = {"ball_tracking": "tracking", "panorama": "dual_lens"}.get(candidate.role, candidate.role)

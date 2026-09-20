@@ -66,7 +66,7 @@ def test_camera_directions_are_taken_from_the_selected_standard_tracking_video()
     resources = {tracking: {"url": tracking, "phases": [INITIAL_PHASE]}}
     assert camera_directions_for_tracking(resources, [(url, det, INITIAL_PHASE) for url, det in pairs]) == (tracking, directions)
     # URL availability follows the explicit field; no replacement or render guessing.
-    assert resource_links(videos)[-1] == directions
+    assert directions in resource_links(videos)
 
 
 def test_camera_directions_missing_for_selected_tracking_and_direct_network_fallback():

@@ -18,7 +18,8 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in __import__("sys").path:
     __import__("sys").path.insert(0, str(REPOSITORY_ROOT))
 
-from dev_app.backend.app.importers.veo.discovery import StructuredDiscovery, write_manifest
+from dev_app.backend.app.importers.veo.discovery import StructuredDiscovery, classify_endpoint, write_manifest
+from dev_app.backend.app.importers.veo.inspector import normalized_resource_url, standard_video_camera_directions
 
 from playwright.sync_api import (
     TimeoutError as PlaywrightTimeoutError,
@@ -1910,6 +1911,7 @@ def build_structured_manifest(root: Path, match_url: str, primary_assets: dict, 
     """Interpret the tool's bounded JSON artifacts with the app's shared rules."""
     discovery = StructuredDiscovery()
     response_by_url = {item.get("url"): item for item in recorder.responses}
+    observed_urls = set()
     for safe_url_value, relative_path in recorder.saved_bodies.items():
         path = root / relative_path
         if path.suffix != ".json" or not path.is_file():
@@ -1919,13 +1921,40 @@ def build_structured_manifest(root: Path, match_url: str, primary_assets: dict, 
         except (OSError, ValueError):
             continue
         response = response_by_url.get(safe_url_value, {})
-        discovery.observe_json(safe_url_value, payload, response.get("phase", "captured"), "standalone_json_capture")
+        discovery.observe_json(safe_url_value, payload, response.get("phase", "captured"), "standalone_json_capture", response.get("status", 200))
+        observed_urls.add(safe_url_value)
+    for response in recorder.responses:
+        endpoint = response.get("url", "")
+        if endpoint not in observed_urls and classify_endpoint(endpoint):
+            discovery.observe_json(endpoint, None, response.get("phase", "captured"), "network_response", response.get("status", 0))
     assets = {"tracking": primary_assets.get("tracking"), "dual_lens": primary_assets.get("dual_lens"),
               "calibration": primary_assets.get("calibration"), "camera_directions": None}
-    for reference in discovery.references:
-        if reference["field"].endswith("camera_directions"):
-            assets["camera_directions"] = reference["url"]
+    tracking_url = primary_assets.get("tracking")
+    tracking_key = normalized_resource_url(tracking_url) if tracking_url else None
+    for safe_url_value, relative_path in recorder.saved_bodies.items():
+        json_path = root / relative_path
+        if json_path.suffix != ".json" or not json_path.is_file():
+            continue
+        try:
+            payload = json.loads(json_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for video_url, directions_url in standard_video_camera_directions(payload):
+            if tracking_key and normalized_resource_url(video_url) == tracking_key:
+                assets["camera_directions"] = sanitize_url(directions_url)
+                break
+        if assets["camera_directions"]:
             break
+    post_interactive_evidence = any(
+        item.get("phase") == "interactive"
+        for item in [*recorder.runtime_resources, *recorder.responses]
+    )
+    interactive_confirmed = bool(getattr(recorder, "interactive_activated", False) and post_interactive_evidence)
+    discovery.record_interactive(interactive_confirmed, {
+        "button_selector": PRIMARY_INTERACTIVE_SELECTOR,
+        "physical_click_succeeded": bool(getattr(recorder, "interactive_activated", False)),
+        "post_interactive_resources_observed": post_interactive_evidence,
+    })
     return discovery.manifest({"source_url": safe_url(match_url)}, assets, {
         "capture_root": str(root), "capture_sources": ["requests", "responses", "runtime", "json", "dom/player"],
         "endpoint_count": len(endpoints), "saved_json_count": sum(1 for path in (root / "json").glob("*.json")),
@@ -2052,6 +2081,7 @@ def main():
     recorder = DiscoveryRecorder(
         root
     )
+    recorder.interactive_activated = False
 
     write_readme(root)
 
@@ -2251,6 +2281,7 @@ def main():
                     interactive,
                     "Interactive",
                 )
+                recorder.interactive_activated = True
 
                 recorder.set_phase(
                     "interactive"
@@ -2364,6 +2395,7 @@ def main():
         endpoints,
         recorder,
     )
+    primary_assets["camera_directions"] = manifest["assets"].get("camera_directions")
     write_manifest(root / "manifest.json", manifest)
 
     keyword_hits = scan_scripts(

@@ -1,4 +1,4 @@
-from dev_app.backend.app.importers.veo.discovery import StructuredDiscovery, referenced_urls
+from dev_app.backend.app.importers.veo.discovery import StructuredDiscovery, classify_endpoint, referenced_urls
 from dev_app.backend.app.importers.veo.inspector import INITIAL_PHASE, camera_directions_for_tracking, standard_video_camera_directions
 
 
@@ -27,6 +27,59 @@ def test_match_dataset_evidence_stays_separate_from_platform_capabilities_and_un
     assert manifest["datasets"]["player_tracking"]["status"] == "not_observed"
     assert manifest["capabilities"]["analytics_available"]["status"] == "observed"
     assert "private" not in str(manifest)
+
+
+def test_highlights_endpoint_is_highlights_and_preserves_records_not_events():
+    discovery = StructuredDiscovery()
+    payload = {"results": [{"id": "h1", "is_ai_generated": True, "annotations": [], "camera_directions": None,
+                            "involved_players": [], "duration": 8, "tags": ["goal"]}]}
+    url = "https://api.veo.co/api/app/matches/abc/highlights/"
+    assert classify_endpoint(url) == "highlights"
+    discovery.observe_json(url, payload, "after_interactive", status_code=200)
+    manifest = discovery.manifest({}, {}, {})
+    assert manifest["datasets"]["highlights"]["status"] == "observed"
+    assert manifest["datasets"]["highlights"]["evidence"][0]["payload"]["results"][0]["id"] == "h1"
+    assert manifest["datasets"]["events"]["status"] == "not_observed"
+
+
+def test_known_dataset_statuses_and_unrequested_remain_distinct():
+    discovery = StructuredDiscovery()
+    root = "https://api.veo.co/api/app/matches/abc"
+    discovery.observe_json(root + "/highlights/", [], "after_interactive", status_code=200)
+    discovery.observe_json(root + "/events/", None, "after_interactive", status_code=403)
+    discovery.observe_json(root + "/lineups/", None, "after_interactive", status_code=404)
+    datasets = discovery.manifest({}, {}, {})["datasets"]
+    assert datasets["highlights"]["status"] == "empty"
+    assert datasets["events"]["status"] == "forbidden"
+    assert datasets["lineup"]["status"] == "unavailable"
+    assert datasets["roster"]["status"] == "not_observed"
+
+
+def test_sdk_events_keys_are_filtered_but_match_event_endpoint_counts():
+    discovery = StructuredDiscovery()
+    discovery.observe_json("https://api.amplitude.com/config", {"events": ["page_view"]}, "initial")
+    discovery.observe_json("https://sentry.io/api/123", {"events": []}, "initial")
+    assert discovery.manifest({}, {}, {})["datasets"]["events"]["status"] == "not_observed"
+    discovery.observe_json("https://api.veo.co/api/app/matches/abc/events/", {"data": [{"type": "goal", "minute": 42}]}, "after_interactive")
+    assert discovery.manifest({}, {}, {})["datasets"]["events"]["status"] == "observed"
+
+
+def test_interactive_requires_confirmed_player_interaction_not_bundle_mentions():
+    discovery = StructuredDiscovery()
+    discovery.observe_json("https://app.veo.co/matches/abc/", {"module": "interactive-player", "feature": "radar"}, "initial", "page_bootstrap")
+    assert discovery.manifest({}, {}, {})["capabilities"]["interactive_available"]["status"] == "not_observed"
+    discovery.record_interactive(True, {"button_selector": "button.interactive-player", "physical_click_succeeded": True})
+    manifest = discovery.manifest({}, {}, {})
+    assert manifest["capabilities"]["interactive_available"]["status"] == "observed"
+    assert manifest["capabilities"]["interactive_available"]["evidence"][0]["source"] == "player_interaction"
+
+
+def test_heatmap_permission_is_capability_evidence_not_dataset():
+    discovery = StructuredDiscovery()
+    discovery.observe_json("https://api.veo.co/api/app/matches/abc/", {"analysis.read_match_heatmap": True}, "initial")
+    manifest = discovery.manifest({}, {}, {})
+    assert manifest["capabilities"]["heatmaps_available"]["status"] == "observed"
+    assert manifest["datasets"]["heatmaps"]["status"] == "not_observed"
 
 
 def test_unknown_match_json_is_bounded_and_sanitized():
