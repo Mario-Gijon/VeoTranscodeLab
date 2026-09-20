@@ -1,4 +1,4 @@
-import { Alert, Box, Typography } from '@mui/material'
+import { Alert, Box } from '@mui/material'
 import { useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import type { GroundPoint, MediaItem, ViewContext } from '../types'
@@ -115,7 +115,7 @@ export default function MatchViewer({ media, mode, crop, context, width, videoRe
 
   const canPick = () => !!videoRef.current && !videoRef.current.seeking && videoRef.current.readyState >= 2 && !error
   return <Box sx={{ minWidth: 0, maxWidth: '100%' }}>
-    {error && <Alert severity="error">{error} La extracción de fotogramas sigue disponible.</Alert>}
+    {error && <Alert severity="error">{error}</Alert>}
     <Box sx={{ position: 'relative', display: mode === 'tracking' ? 'block' : 'none', lineHeight: 0 }}>
     <video ref={videoRef} crossOrigin="anonymous" src={sourceUrl} preload="metadata" playsInline
       style={{ display: mode === 'tracking' ? 'block' : 'none', width: '100%', maxHeight: '65vh', objectFit: 'contain', objectPosition: 'center', background: '#080a0c' }}
@@ -130,7 +130,7 @@ export default function MatchViewer({ media, mode, crop, context, width, videoRe
       onLoadedMetadata={(event) => { event.currentTarget.currentTime = Math.min(initialTime, Math.max(0, event.currentTarget.duration - .001)) }}
       onTimeUpdate={(event) => onTime(event.currentTarget.currentTime)}
       onPlay={() => onPlayback(true)} onPause={() => onPlayback(false)} onEnded={() => onPlayback(false)}
-      onError={() => setError('El navegador no puede reproducir el códec de esta fuente. El archivo original se conserva; prueba a renderizar un fotograma.')} />
+      onError={() => setError('No se puede reproducir el formato de este vídeo.')} />
     </Box>
     <Box ref={surface} sx={{ display: mode === 'tracking' ? 'none' : 'block', position: 'relative', width: '100%', lineHeight: 0,
       cursor: mode === 'interactive' ? (selectionEnabled ? 'crosshair' : 'grab') : selectionEnabled ? 'crosshair' : 'default', touchAction: mode === 'interactive' ? 'none' : 'auto' }}
@@ -192,6 +192,5 @@ export default function MatchViewer({ media, mode, crop, context, width, videoRe
       </svg>}
       <canvas ref={magnifier} width={180} height={180} style={{ display: hover && mode !== 'interactive' ? 'block' : 'none', position: 'absolute', pointerEvents: 'none', border: '1px solid #eee', width: 180, height: 180 }} />
     </Box>
-    <Typography variant="caption" color="text.secondary">{mode === 'interactive' ? (selectionEnabled ? 'Arrastra para mirar. Desplázate para ampliar. Haz clic sin arrastrar para seleccionar un punto.' : 'Arrastra para mirar y desplázate para ampliar. Seleccionar está desactivado.') : mode === 'tracking' ? (selectionEnabled ? (trackingAvailable ? 'Haz clic en el campo para seleccionar un punto.' : 'La selección no está disponible para este vídeo.') : 'Seleccionar está desactivado.') : (selectionEnabled ? 'Haz clic para pausar y medir el píxel mostrado. Rueda: lupa 2×–10×.' : 'Seleccionar está desactivado. Rueda: lupa 2×–10×.')}</Typography>
   </Box>
 }

@@ -9,7 +9,7 @@ export default function EventsPanel({ events, total, canSeek, loading, hasMore, 
   if (!events.length) return null
   return <Box component="section" aria-label="Eventos del partido" sx={{ mt: 1, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
     <Typography variant="subtitle2">{events.every((event) => event.source_dataset === 'highlights') ? 'Jugadas destacadas' : 'Eventos'} · {total}</Typography>
-    {!canSeek && <Typography variant="caption">Añade el vídeo del partido y activa una vista disponible para navegar por sus jugadas.</Typography>}
+    {!canSeek && <Typography variant="caption">Activa una vista disponible para saltar a la jugada.</Typography>}
     <Box sx={{ maxHeight: 220, overflowY: 'auto', display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' }, gap: .5, mt: .5 }}>
       {events.map((event) => <button key={eventKey(event)} type="button" disabled={!canSeek} onClick={() => onEvent(event)}
         style={{ display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left', color: 'inherit', background: 'transparent', border: '1px solid #53645d', borderRadius: 4, padding: 6, cursor: canSeek ? 'pointer' : 'default' }}>

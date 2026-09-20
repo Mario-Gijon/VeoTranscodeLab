@@ -12,7 +12,7 @@ export default function App() {
   const [workspaceId, setWorkspaceId] = useState<string | null>(null)
   const [ready, setReady] = useState(false)
   const [error, setError] = useState('')
-  const refresh = async () => { try { const [nextMatches, nextCalibrations] = await Promise.all([api.matches(), api.calibrations()]); setMatches(nextMatches); setCalibrations(nextCalibrations) } catch (reason) { setError(reason instanceof Error ? reason.message : 'No se pudo contactar con el backend FastAPI.') } finally { setReady(true) } }
+  const refresh = async () => { try { const [nextMatches, nextCalibrations] = await Promise.all([api.matches(), api.calibrations()]); setMatches(nextMatches); setCalibrations(nextCalibrations) } catch (reason) { setError(reason instanceof Error ? reason.message : 'No se pudo cargar la biblioteca.') } finally { setReady(true) } }
   useEffect(() => {
     if (workspaceId) return
     void refresh()

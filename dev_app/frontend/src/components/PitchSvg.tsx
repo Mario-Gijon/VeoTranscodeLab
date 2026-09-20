@@ -1,4 +1,4 @@
-import { Box, Typography } from '@mui/material'
+import { Box } from '@mui/material'
 import type { GroundPoint } from '../types'
 
 interface Props { length: number; width: number; points: GroundPoint[] }
@@ -36,6 +36,5 @@ export default function PitchSvg({ length, width, points }: Props) {
       </g>)}</g>
       {points.map((point, index) => point.measured_x !== null && point.measured_z !== null && <text key={index} x={point.measured_x + 2} y={-point.measured_z - 2} fontSize="3" fill="white" stroke="#123" strokeWidth="0.15" paintOrder="stroke">{point.point_index ?? index + 1}</text>)}
     </svg>
-    <Typography variant="caption" color="text.secondary">Diamante azul: hito esperado · amarillo/naranja: clic medido</Typography>
   </Box>
 }

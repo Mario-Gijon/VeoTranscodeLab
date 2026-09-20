@@ -1,4 +1,4 @@
-import { Box, Chip, Typography } from '@mui/material'
+import { Box, Chip } from '@mui/material'
 import { useEffect, useRef, useState } from 'react'
 import type { GroundPoint, RenderedPanorama } from '../types'
 
@@ -68,6 +68,5 @@ export default function PanoramaViewer({ panorama, points, onPixelClick }: Props
         <Chip size="small" label={`${magnification}×`} sx={{ position: 'absolute', right: 4, bottom: 4, fontSize: 11, height: 20, bgcolor: '#101722e6' }} />
       </Box>}
     </Box>
-    <Typography variant="caption" color="text.secondary">Rueda sobre la panorámica: lupa 2×–10×. Los clics usan el mismo píxel natural mostrado bajo la cruz.</Typography>
   </Box>
 }
