@@ -108,7 +108,7 @@ def test_generated_highlights_metadata_detects_a_generic_video_url():
 def test_explicit_highlights_compilation_metadata_is_eligible_but_individual_clip_is_not():
     reel = "https://c.veocdn.com/match/reel/video.mp4"
     clip = "https://c.veocdn.com/match/clip/video.mp4"
-    payload = {"videos": [{"url": reel, "render_type": "highlights_compilation"}, {"url": clip, "render_type": "standard", "is_ai_generated": True}]}
+    payload = {"videos": [{"type": "reel", "video": {"url": reel}}, {"url": clip, "render_type": "standard", "is_ai_generated": True}]}
     assert generated_highlights_videos(payload) == [reel]
 
 

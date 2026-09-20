@@ -20,7 +20,7 @@ export default function PitchSvg({ length, width, points }: Props) {
   const viewBox = `${minX} ${-maxZ} ${maxX - minX} ${maxZ - minZ}`
   const box = (x: number, z: number, w: number, h: number) => <rect x={x} y={-z - h / 2} width={w} height={h} fill="none" />
   return <Box>
-    <svg viewBox={viewBox} width="100%" style={{ display: 'block', background: '#17643d', borderRadius: 6, aspectRatio: `${length}/${width}` }} aria-label="Pitch reference">
+    <svg viewBox={viewBox} width="100%" style={{ display: 'block', background: '#17643d', borderRadius: 6, aspectRatio: `${length}/${width}` }} aria-label="Referencia del campo">
       <g transform="scale(1 -1)" fill="none" stroke="#f2fff6" strokeWidth="0.55" vectorEffect="non-scaling-stroke">
         <rect x={-halfL} y={-halfW} width={length} height={width} />
         <line x1="0" y1={-halfW} x2="0" y2={halfW} />
@@ -36,6 +36,6 @@ export default function PitchSvg({ length, width, points }: Props) {
       </g>)}</g>
       {points.map((point, index) => point.measured_x !== null && point.measured_z !== null && <text key={index} x={point.measured_x + 2} y={-point.measured_z - 2} fontSize="3" fill="white" stroke="#123" strokeWidth="0.15" paintOrder="stroke">{point.point_index ?? index + 1}</text>)}
     </svg>
-    <Typography variant="caption" color="text.secondary">Blue diamond: expected landmark · yellow/orange: measured click</Typography>
+    <Typography variant="caption" color="text.secondary">Diamante azul: hito esperado · amarillo/naranja: clic medido</Typography>
   </Box>
 }

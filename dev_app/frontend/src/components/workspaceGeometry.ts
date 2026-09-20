@@ -4,7 +4,7 @@ export const VIEW_MODES = ['tracking', 'interactive', 'panorama', 'dual_lens'] a
 export type ViewMode = typeof VIEW_MODES[number]
 
 export function viewLabel(view: ViewMode) {
-  return view === 'tracking' ? 'Seguimiento de balón' : view === 'dual_lens' ? 'Dual lens' : view[0].toUpperCase() + view.slice(1)
+  return view === 'tracking' ? 'Seguimiento de balón' : view === 'interactive' ? 'Interactivo' : view === 'panorama' ? 'Panorámica' : 'Doble lente'
 }
 
 /** The media element is the Workspace clock, not React's timeupdate cadence. */

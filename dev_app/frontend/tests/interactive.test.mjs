@@ -3,9 +3,9 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dragCamera, initialCamera, interactiveGroundPoint, interactiveRay, interactiveShader, isDrag, MAX_FOV, MIN_FOV, PITCH_LIMIT, safeCamera, wheelCamera } from '../src/components/interactiveCamera.ts'
 import { appendMeasurement, canSelect, latestSelectedPitchPoint, matchTimestamp, pitchPoints, validationStatistics, viewLabel, VIEW_MODES } from '../src/components/workspaceGeometry.ts'
-import { cameraDirectionAtTime, parseCameraDirections, projectTrackingGroundPoint } from '../src/components/trackingOverlay.ts'
 import { projectGroundPoint, interactiveTransform } from '../src/components/interactiveCamera.ts'
 import { nativeVideoPixel } from '../src/components/viewCoordinates.ts'
+import { clampMediaTime, formatMediaTime } from '../src/components/mediaTime.ts'
 
 const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
 const world = [...identity]; world[13] = 10
@@ -20,6 +20,15 @@ test('four independent modes retain the media clock, not stale React time', () =
   assert.equal(VIEW_MODES.includes('tracking'), true)
   for (const _mode of VIEW_MODES) close(matchTimestamp({ currentTime: 71.23456 }, 70), 71.23456)
   close(matchTimestamp(null, 71.23456), 71.23456)
+})
+test('media controls clamp seeking and format standard zero-padded time', () => {
+  assert.equal(clampMediaTime(-10, 120), 0)
+  assert.equal(clampMediaTime(130, 120), 120)
+  assert.equal(clampMediaTime(Number.NaN, 120), 0)
+  assert.equal(formatMediaTime(4), '00:00:04')
+  assert.equal(formatMediaTime(124.382), '00:02:04')
+  assert.equal(formatMediaTime(7249), '02:00:49')
+  assert.equal(formatMediaTime(undefined), '00:00:00')
 })
 test('camera initializes from presentation bounds, clamps tilt/zoom, wraps yaw and prevents NaN', () => {
   assert.deepEqual(initialCamera(context), { longitude: 0, latitude: .5, fov: Math.PI / 3 })
@@ -158,12 +167,16 @@ test('Interactive world anchor forward-projection follows camera movement, zoom 
   assert.ok(zoomed.u > wide.u)
   assert.equal(projectGroundPoint(interactiveTransform(context, { ...camera, longitude: Math.PI }), camera.fov, 16 / 9, 0, 10), null)
 })
-test('Tracking forward projection uses current .det row and hides outside the viewport', () => {
-  const samples = parseCameraDirections('0,0.7853981633974483,1,0\n0.4,0.7853981633974483,1,0')
-  assert.deepEqual(cameraDirectionAtTime(samples, 0, 30), samples[0]); assert.deepEqual(cameraDirectionAtTime(samples, 2 / 30, 30), samples[1])
-  const trackingContext = { ...context, tracking_geometry: { available: true, reason: '', logic2camera: identity, fps: 30, aspect: 16 / 9 } }
-  const first = projectTrackingGroundPoint(trackingContext, samples, 0, 0, 10)
-  const second = projectTrackingGroundPoint(trackingContext, samples, 2 / 30, 0, 10)
-  close(first.u, .5); assert.notEqual(first.u, second.u)
-  assert.equal(projectTrackingGroundPoint(trackingContext, samples, 0, 1000, 10), null)
+test('Tracking and Interactive keep click-to-pitch without projected image markers', () => {
+  const viewer = readFileSync(new URL('../src/components/MatchViewer.tsx', import.meta.url), 'utf8')
+  assert.doesNotMatch(viewer, /projectTrackingGroundPoint|parseCameraDirections|Projected pitch marker/)
+  assert.match(viewer, /onClick\(pixel\.x, pixel\.y/)
+})
+test('Workspace keeps the optional highlights role and Spanish compact playback controls', () => {
+  const workspace = readFileSync(new URL('../src/pages/WorkspacePage.tsx', import.meta.url), 'utf8')
+  assert.match(workspace, /veo_highlights/)
+  assert.match(workspace, /Ver highlights de Veo/)
+  assert.match(workspace, /Retroceder 10 segundos/)
+  assert.match(workspace, /Avanzar 10 segundos/)
+  assert.doesNotMatch(workspace, /Extract frame \/ CPU render/)
 })

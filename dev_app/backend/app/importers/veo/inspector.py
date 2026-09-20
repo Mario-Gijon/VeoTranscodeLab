@@ -114,23 +114,23 @@ def standard_follow_videos(value) -> list[tuple[str, str | None]]:
 
 
 def generated_highlights_videos(value) -> list[str]:
-    """Accept only explicit compilation/reel evidence on the video object itself."""
+    """Accept only explicit compilation/reel evidence from the video or its parent."""
     videos: list[str] = []
 
-    def visit(item, depth=0):
+    def visit(item, inherited_compilation=False, depth=0):
         if depth > 12:
             return
         if isinstance(item, dict):
             kind = str(item.get("render_type") or item.get("type") or item.get("kind") or "").lower()
-            marker = item.get("is_highlights_compilation") is True or item.get("is_compilation") is True or item.get("is_reel") is True or kind in {"highlights_compilation", "highlights_reel", "reel"}
+            explicit_compilation = item.get("is_highlights_compilation") is True or item.get("is_compilation") is True or item.get("is_reel") is True or kind in {"highlights_compilation", "highlights_reel", "reel"}
             url = item.get("url")
-            if marker and isinstance(url, str) and url.startswith("https://") and urlsplit(url).path.lower().endswith(".mp4"):
+            if (explicit_compilation or inherited_compilation) and isinstance(url, str) and url.startswith("https://") and urlsplit(url).path.lower().endswith(".mp4"):
                 videos.append(url)
             for child in item.values():
-                visit(child, depth + 1)
+                visit(child, inherited_compilation or explicit_compilation, depth + 1)
         elif isinstance(item, list):
             for child in item[:500]:
-                visit(child, depth + 1)
+                visit(child, inherited_compilation, depth + 1)
 
     visit(value)
     return list(dict.fromkeys(videos))

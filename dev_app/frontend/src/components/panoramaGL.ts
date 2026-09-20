@@ -5,7 +5,7 @@ import { interactiveShader, INTERACTIVE_UNIFORMS } from './interactiveCamera'
  * including the validated inverse camera2presentation convention. */
 export function createPanoramaGL(canvas: HTMLCanvasElement, context: ViewContext, enableInteractive = false) {
   const gl = canvas.getContext('webgl', { alpha: false, preserveDrawingBuffer: true })
-  if (!gl) throw new Error('WebGL is unavailable. Use the CPU frame render below.')
+  if (!gl) throw new Error('WebGL no está disponible. Usa el renderizado de fotogramas.')
   const shaders: WebGLShader[] = []
   const buffers: WebGLBuffer[] = []
   const textures: WebGLTexture[] = []

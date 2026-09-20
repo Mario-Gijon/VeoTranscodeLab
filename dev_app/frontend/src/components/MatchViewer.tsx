@@ -4,11 +4,10 @@ import type { RefObject } from 'react'
 import type { GroundPoint, MediaItem, ViewContext } from '../types'
 import { api } from '../api/client'
 import { createPanoramaGL } from './panoramaGL'
-import { dragCamera, initialCamera, interactiveTransform, isDrag, projectGroundPoint, wheelCamera } from './interactiveCamera'
+import { dragCamera, initialCamera, interactiveTransform, isDrag, wheelCamera } from './interactiveCamera'
 import type { InteractiveCamera } from './interactiveCamera'
 import type { ViewMode } from './workspaceGeometry'
 import { naturalPixel, nativeVideoPixel, stackedPixel } from './viewCoordinates'
-import { parseCameraDirections, projectTrackingGroundPoint } from './trackingOverlay'
 
 export type { ViewMode } from './workspaceGeometry'
 export interface ViewerPick { width: number; height: number; timestamp: number; camera?: InteractiveCamera }
@@ -17,11 +16,11 @@ interface Props {
   width: number; videoRef: RefObject<HTMLVideoElement | null>; initialTime: number
   cameraRef: RefObject<InteractiveCamera | null>
   onTime: (value: number) => void; onPlayback: (value: boolean) => void
-  points: GroundPoint[]; selectedPoint?: GroundPoint | null; selectionEnabled: boolean; directionsUrl?: string
+  points: GroundPoint[]; selectionEnabled: boolean
   onClick: (x: number, y: number, pick: ViewerPick) => void; trackingAvailable?: boolean
 }
 
-export default function MatchViewer({ media, mode, crop, context, width, videoRef, initialTime, cameraRef, onTime, onPlayback, points, selectedPoint, selectionEnabled, directionsUrl, onClick, trackingAvailable }: Props) {
+export default function MatchViewer({ media, mode, crop, context, width, videoRef, initialTime, cameraRef, onTime, onPlayback, points, selectionEnabled, onClick, trackingAvailable }: Props) {
   // One decoder, one persistent WebGL canvas and one RAW 2D canvas per source.
   const canvas = useRef<HTMLCanvasElement>(null)
   const raw = useRef<HTMLCanvasElement>(null)
@@ -33,23 +32,12 @@ export default function MatchViewer({ media, mode, crop, context, width, videoRe
   const rendered = useRef<{ camera: InteractiveCamera; width: number; height: number; timestamp: number } | null>(null)
   const [error, setError] = useState('')
   const [hover, setHover] = useState(false)
-  const directions = useRef<number[][]>([])
-  const [overlay, setOverlay] = useState<{ left: number; top: number } | null>(null)
   const live = useRef({ mode, crop, width })
-  const dynamic = useRef({ selectionEnabled, selectedPoint })
-  dynamic.current = { selectionEnabled, selectedPoint }
   useEffect(() => { live.current = { mode, crop, width }; gesture.current = null; pointer.current = null; setHover(false) }, [mode, crop, width])
   const pausedAt = useRef(initialTime)
   const sourceUrl = api.url(media.url)
   const outputWidth = mode === 'panorama' ? width : 2048
   const outputHeight = mode === 'panorama' ? width * 9 / 16 : crop === 'stacked' ? 2048 : 1024
-
-  useEffect(() => {
-    let active = true
-    directions.current = []
-    if (directionsUrl) fetch(directionsUrl).then(response => response.ok ? response.text() : '').then(text => { if (active) directions.current = parseCameraDirections(text) }).catch(() => {})
-    return () => { active = false }
-  }, [directionsUrl])
 
   useEffect(() => {
     const element = surface.current
@@ -115,47 +103,20 @@ export default function MatchViewer({ media, mode, crop, context, width, videoRe
             ctx.fillStyle = '#101216'; ctx.fillRect(0, 158, 180, 22)
             ctx.fillStyle = 'white'; ctx.font = '12px sans-serif'; ctx.fillText(`${zoom.current}× · ${cursor.x}, ${cursor.y}`, 6, 173)
           }
-          const point = dynamic.current.selectedPoint
-          if (dynamic.current.selectionEnabled && point && point.measured_x !== null && point.measured_z !== null && context && view.mode === 'interactive') {
-            let projected = null
-            if (camera) projected = projectGroundPoint(interactiveTransform(context, camera), camera.fov, w / h, point.measured_x, point.measured_z)
-            if (projected) setOverlay({ left: projected.u * 100, top: (1 - projected.v) * 100 })
-            else setOverlay(null)
-          } else setOverlay(null)
         }
         animation = requestAnimationFrame(draw)
       } catch (reason) {
         videoRef.current?.pause()
-        setError(reason instanceof Error ? reason.message : 'Cannot render this video')
+        setError(reason instanceof Error ? reason.message : 'No se puede renderizar este vídeo')
       }
     }
     animation = requestAnimationFrame(draw)
     return () => { cancelAnimationFrame(animation); observer.disconnect(); gpu?.dispose(); rendered.current = null }
   }, [context, videoRef, cameraRef, sourceUrl])
 
-  useEffect(() => {
-    let frame = 0
-    const update = () => {
-      const video = videoRef.current
-      const point = selectedPoint
-      if (mode === 'tracking' && selectionEnabled && context && video && point && point.measured_x !== null && point.measured_z !== null) {
-        const projected = projectTrackingGroundPoint(context, directions.current as [number, number, number, number][], video.currentTime, point.measured_x, point.measured_z)
-        const bounds = video.getBoundingClientRect(), scale = Math.min(bounds.width / video.videoWidth, bounds.height / video.videoHeight)
-        if (projected && scale > 0) {
-          const left = (bounds.width - video.videoWidth * scale) / 2 + projected.u * video.videoWidth * scale
-          const top = (bounds.height - video.videoHeight * scale) / 2 + (1 - projected.v) * video.videoHeight * scale
-          setOverlay({ left: left / bounds.width * 100, top: top / bounds.height * 100 })
-        } else setOverlay(null)
-      }
-      frame = requestAnimationFrame(update)
-    }
-    frame = requestAnimationFrame(update)
-    return () => cancelAnimationFrame(frame)
-  }, [mode, selectionEnabled, selectedPoint, context, videoRef])
-
   const canPick = () => !!videoRef.current && !videoRef.current.seeking && videoRef.current.readyState >= 2 && !error
   return <Box sx={{ minWidth: 0, maxWidth: '100%' }}>
-    {error && <Alert severity="error">{error} CPU frame rendering remains available.</Alert>}
+    {error && <Alert severity="error">{error} La extracción de fotogramas sigue disponible.</Alert>}
     <Box sx={{ position: 'relative', display: mode === 'tracking' ? 'block' : 'none', lineHeight: 0 }}>
     <video ref={videoRef} crossOrigin="anonymous" src={sourceUrl} preload="metadata" playsInline
       style={{ display: mode === 'tracking' ? 'block' : 'none', width: '100%', maxHeight: '65vh', objectFit: 'contain', objectPosition: 'center', background: '#080a0c' }}
@@ -170,8 +131,7 @@ export default function MatchViewer({ media, mode, crop, context, width, videoRe
       onLoadedMetadata={(event) => { event.currentTarget.currentTime = Math.min(pausedAt.current, Math.max(0, event.currentTarget.duration - .001)) }}
       onTimeUpdate={(event) => onTime(event.currentTarget.currentTime)}
       onPlay={() => onPlayback(true)} onPause={() => onPlayback(false)} onEnded={() => onPlayback(false)}
-      onError={() => setError('The browser cannot play this source codec. The original file is retained; try extracting a frame.')} />
-    {selectionEnabled && overlay && mode === 'tracking' && <Box aria-label="Projected pitch marker" sx={{ position: 'absolute', left: `${overlay.left}%`, top: `${overlay.top}%`, width: 18, height: 18, borderRadius: '50%', bgcolor: '#ffd258', border: '2px solid #000', transform: 'translate(-50%, -50%)', pointerEvents: 'none' }} />}
+      onError={() => setError('El navegador no puede reproducir el códec de esta fuente. El archivo original se conserva; prueba a renderizar un fotograma.')} />
     </Box>
     <Box ref={surface} sx={{ display: mode === 'tracking' ? 'none' : 'block', position: 'relative', width: '100%', lineHeight: 0,
       cursor: mode === 'interactive' ? (selectionEnabled ? 'crosshair' : 'grab') : selectionEnabled ? 'crosshair' : 'default', touchAction: mode === 'interactive' ? 'none' : 'auto' }}
@@ -219,10 +179,10 @@ export default function MatchViewer({ media, mode, crop, context, width, videoRe
         const source = mode === 'dual_lens' ? stackedPixel(pixel.x, pixel.y, crop) : pixel
         onClick(source.x, source.y, { width: outputWidth, height: mode === 'dual_lens' ? 2048 : outputHeight, timestamp: videoRef.current!.currentTime })
       }}>
-      <canvas ref={canvas} aria-label={mode === 'interactive' ? 'Interactive view' : 'Panorama view'}
+      <canvas ref={canvas} aria-label={mode === 'interactive' ? 'Vista interactiva' : 'Vista panorámica'}
         style={{ width: '100%', display: mode === 'dual_lens' ? 'none' : 'block', background: '#080a0c',
           aspectRatio: '16 / 9', height: mode === 'interactive' ? 'auto' : undefined, maxHeight: mode === 'interactive' ? '65vh' : undefined }} />
-      <canvas ref={raw} aria-label="Dual Lens view" width={2048} height={crop === 'stacked' ? 2048 : 1024}
+      <canvas ref={raw} aria-label="Vista de doble lente" width={2048} height={crop === 'stacked' ? 2048 : 1024}
         style={{ width: '100%', display: mode === 'dual_lens' ? 'block' : 'none', background: '#080a0c' }} />
       {selectionEnabled && mode !== 'interactive' && <svg viewBox={`0 0 ${outputWidth} ${outputHeight}`} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
         {points.map((point) => {
@@ -231,9 +191,8 @@ export default function MatchViewer({ media, mode, crop, context, width, videoRe
           return <g key={point.point_index}><circle cx={point.pixel_x + .5} cy={y + .5} r={outputWidth / 140} fill="#ffd258" stroke="#000" /><text x={point.pixel_x + .5} y={y + .5} textAnchor="middle" dominantBaseline="central" fontSize={outputWidth / 90} fill="#000">{point.point_index}</text></g>
         })}
       </svg>}
-      {selectionEnabled && overlay && mode === 'interactive' && <Box aria-label="Projected pitch marker" sx={{ position: 'absolute', left: `${overlay.left}%`, top: `${overlay.top}%`, width: 18, height: 18, borderRadius: '50%', bgcolor: '#ffd258', border: '2px solid #000', transform: 'translate(-50%, -50%)', pointerEvents: 'none' }} />}
       <canvas ref={magnifier} width={180} height={180} style={{ display: hover && mode !== 'interactive' ? 'block' : 'none', position: 'absolute', pointerEvents: 'none', border: '1px solid #eee', width: 180, height: 180 }} />
     </Box>
-    <Typography variant="caption" color="text.secondary">{mode === 'interactive' ? 'Drag to look around. Scroll to zoom. Click the ground to select a pitch point.' : mode === 'tracking' ? (trackingAvailable ? 'Click the ground to select a pitch point.' : 'Pitch selection is unavailable for this video.') : 'Click pauses playback to measure the displayed pixel. Wheel: magnifier 2×–10×.'}</Typography>
+    <Typography variant="caption" color="text.secondary">{mode === 'interactive' ? (selectionEnabled ? 'Arrastra para mirar. Desplázate para ampliar. Haz clic sin arrastrar para seleccionar un punto.' : 'Arrastra para mirar y desplázate para ampliar. Seleccionar está desactivado.') : mode === 'tracking' ? (selectionEnabled ? (trackingAvailable ? 'Haz clic en el campo para seleccionar un punto.' : 'La selección no está disponible para este vídeo.') : 'Seleccionar está desactivado.') : (selectionEnabled ? 'Haz clic para pausar y medir el píxel mostrado. Rueda: lupa 2×–10×.' : 'Seleccionar está desactivado. Rueda: lupa 2×–10×.')}</Typography>
   </Box>
 }

@@ -57,7 +57,7 @@ export default function PanoramaViewer({ panorama, points, onPixelClick }: Props
       onClick={(event) => { if (ref.current) { const pixel = cssToNaturalPixel(event, ref.current, panorama); onPixelClick(pixel.x, pixel.y) } }}
       sx={{ position: 'relative', overflow: 'hidden', lineHeight: 0, cursor: 'crosshair', borderRadius: 1, bgcolor: '#05080d', touchAction: 'none', '& img': { display: 'block', width: '100%', height: 'auto' } }}
     >
-      <img src={imageUrl} alt="Rendered Veo panorama" draggable={false} />
+      <img src={imageUrl} alt="Panorámica Veo renderizada" draggable={false} />
       <svg viewBox={`0 0 ${panorama.width} ${panorama.height}`} preserveAspectRatio="none" aria-hidden="true" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
         {points.map((point, index) => <g key={`${point.pixel_x}-${point.pixel_y}-${index}`}>
           <circle cx={point.pixel_x + 0.5} cy={point.pixel_y + 0.5} r="10" fill={point.status === 'inside_field' ? '#ffcf4a' : '#ff953f'} stroke="#101722" strokeWidth="2" />
@@ -68,6 +68,6 @@ export default function PanoramaViewer({ panorama, points, onPixelClick }: Props
         <Chip size="small" label={`${magnification}×`} sx={{ position: 'absolute', right: 4, bottom: 4, fontSize: 11, height: 20, bgcolor: '#101722e6' }} />
       </Box>}
     </Box>
-    <Typography variant="caption" color="text.secondary">Wheel over panorama: magnifier 2×–10×. Clicks use the same natural pixel shown under the crosshair.</Typography>
+    <Typography variant="caption" color="text.secondary">Rueda sobre la panorámica: lupa 2×–10×. Los clics usan el mismo píxel natural mostrado bajo la cruz.</Typography>
   </Box>
 }
