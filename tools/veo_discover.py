@@ -18,8 +18,16 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in __import__("sys").path:
     __import__("sys").path.insert(0, str(REPOSITORY_ROOT))
 
-from dev_app.backend.app.importers.veo.discovery import StructuredDiscovery, classify_endpoint, write_manifest
-from dev_app.backend.app.importers.veo.inspector import normalized_resource_url, standard_video_camera_directions
+from dev_app.backend.app.importers.veo.classifier import sanitize_url
+from dev_app.backend.app.importers.veo.discovery import (
+    StructuredDiscovery,
+    classify_endpoint,
+    write_manifest,
+)
+from dev_app.backend.app.importers.veo.inspector import (
+    normalized_resource_url,
+    standard_video_camera_directions,
+)
 
 from playwright.sync_api import (
     TimeoutError as PlaywrightTimeoutError,

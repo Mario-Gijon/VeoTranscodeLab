@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 import shutil
+import json
 
 from dev_app.backend.app import main
 from dev_app.backend.app.importers.veo.classifier import classify_resource, ranked_candidates, sanitize_url
-from dev_app.backend.app.importers.veo.inspector import AFTER_INTERACTIVE_PHASE, INITIAL_PHASE, activate_interactive, camera_directions_for_tracking, dismiss_membership_modal, phase_diagnostics, resource_links, standard_video_camera_directions
+from dev_app.backend.app.importers.veo.inspector import AFTER_INTERACTIVE_PHASE, INITIAL_PHASE, activate_interactive, bounded_json_response, camera_directions_for_tracking, dismiss_membership_modal, phase_diagnostics, resource_links, standard_video_camera_directions
 from dev_app.backend.app.importers.veo.models import VeoCandidate, VeoInspection, importable
 from dev_app.backend.app.importers.veo.service import ImportJob, VeoImportService
 from dev_app.backend.app.schemas import VeoInspectRequest
@@ -79,6 +80,60 @@ def test_camera_directions_missing_for_selected_tracking_and_direct_network_fall
     direct = resource_links({"asset": "https://cdn.example/detections_constrained.det?sig=private"})
     candidate = classify_resource("det", direct[0])
     assert candidate.role == "camera_directions" and importable(candidate)
+
+
+class _JsonResponse:
+    def __init__(self, url: str, payload: object, headers: dict[str, str]):
+        self.url = url
+        self.headers = headers
+        self._body = json.dumps(payload).encode("utf-8")
+        self.reads = 0
+
+    def body(self):
+        self.reads += 1
+        return self._body
+
+
+def test_bounded_json_capture_accepts_match_videos_with_and_without_content_length():
+    payload = {"videos": [{"render_type": "standard", "url": "https://c.veocdn.com/m/standard/video.mp4",
+                             "camera_directions": "https://c.veocdn.com/m/standard/detections_constrained.det"}]}
+    endpoint = "https://api.veo.co/api/app/matches/match-1/videos/"
+    with_length = _JsonResponse(endpoint, payload, {"content-type": "application/json", "content-length": str(len(json.dumps(payload)))})
+    without_length = _JsonResponse(endpoint, payload, {"content-type": "application/json; charset=utf-8"})
+    assert bounded_json_response(with_length) == payload
+    assert bounded_json_response(without_length) == payload
+    assert standard_video_camera_directions(bounded_json_response(without_length)) == [
+        (payload["videos"][0]["url"], payload["videos"][0]["camera_directions"])
+    ]
+
+
+def test_bounded_json_capture_rejects_unknown_length_non_match_and_oversized_bodies():
+    telemetry = _JsonResponse("https://api.amplitude.com/config", {"events": []}, {"content-type": "application/json"})
+    assert bounded_json_response(telemetry) is None and telemetry.reads == 0
+    oversized = _JsonResponse("https://api.veo.co/api/app/matches/match-1/videos/", {"blob": "x" * 2_100_000}, {"content-type": "application/json"})
+    assert bounded_json_response(oversized) is None
+
+
+def test_resolved_assets_include_associated_camera_directions():
+    tracking = classify_resource("tracking", "https://cdn.example/video.mp4", discovery_phases=[INITIAL_PHASE])
+    directions = classify_resource("directions", "https://cdn.example/detections_constrained.det", discovery_phases=[INITIAL_PHASE])
+    inspection = VeoInspection("inspect", "https://app.veo.co/matches/x", "https://app.veo.co/matches/x", candidates=[tracking, directions])
+    assert inspection.public_dict()["resolved_assets"]["camera_directions"] == "directions"
+
+
+def test_import_selection_includes_discovered_camera_directions(tmp_path, monkeypatch):
+    manager = VeoImportService(WorkspaceStore(tmp_path), tmp_path)
+    calibration = classify_resource("calibration", "https://cdn.example/camera_alignment.veo", discovery_phases=[AFTER_INTERACTIVE_PHASE])
+    calibration.field_length, calibration.field_width = 105, 68
+    tracking = classify_resource("tracking", "https://cdn.example/video.mp4", discovery_phases=[INITIAL_PHASE])
+    panorama = classify_resource("panorama", "https://cdn.example/transcode-1.mp4", discovery_phases=[AFTER_INTERACTIVE_PHASE])
+    directions = classify_resource("directions", "https://cdn.example/detections_constrained.det", discovery_phases=[INITIAL_PHASE])
+    inspection = VeoInspection("inspect", "https://app.veo.co/matches/x", "https://app.veo.co/matches/x", candidates=[calibration, tracking, panorama, directions])
+    manager._inspections[inspection.identifier] = inspection
+    monkeypatch.setattr(manager, "_run_import", lambda _job: None)
+    job = manager.start_import(inspection.identifier, inspection.public_dict()["resolved_assets"])
+    assert job.selected_assets["camera_directions"] == "directions"
+    assert job.assets["camera_directions"]["filename"] == "detections_constrained.det"
 
 
 def test_exact_interactive_player_button_is_preferred_over_text_fallback():

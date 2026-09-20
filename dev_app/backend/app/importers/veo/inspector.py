@@ -22,6 +22,7 @@ from .models import VeoCandidate, VeoInspection
 INITIAL_PHASE = "initial"
 AFTER_INTERACTIVE_PHASE = "after_interactive"
 MAX_RESOURCES = 100
+MAX_JSON_RESPONSE_BYTES = 2_000_000
 POST_INTERACTIVE_CAPTURE_MS = 30_000
 ACTIVATION_OBSERVE_MS = 6_000
 INTERACTIVE_LABEL = re.compile(r"^\s*(interactive|interactivo)\s*$", re.IGNORECASE)
@@ -120,6 +121,40 @@ def camera_directions_for_tracking(resources: dict[str, dict[str, object]], meta
 def _is_relevant_resource(url: str) -> bool:
     path = urlsplit(url).path.lower()
     return any(token in path for token in ("transcode-", "video.mp4", "camera_alignment", "detections_constrained.det", ".veo", "/panorama/"))
+
+
+def is_match_json_endpoint(url: str) -> bool:
+    """Identify Veo match APIs safe to inspect when transfer size is unknown."""
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").lower()
+    path = parsed.path.lower()
+    return (host == "veo.co" or host.endswith(".veo.co")) and "/matches/" in path
+
+
+def bounded_json_response(response) -> object | None:
+    """Parse a JSON response within a hard body bound.
+
+    Playwright exposes complete response bodies rather than a streaming reader.
+    Unknown-length reads are therefore restricted to match-specific Veo APIs.
+    """
+    content = (response.headers.get("content-type") or "").lower()
+    if "json" not in content:
+        return None
+    length_text = response.headers.get("content-length", "")
+    if length_text.isdigit() and int(length_text) > MAX_JSON_RESPONSE_BYTES:
+        return None
+    if not length_text.isdigit() and not is_match_json_endpoint(response.url):
+        return None
+    try:
+        body = response.body()
+    except Exception:
+        return None
+    if len(body) > MAX_JSON_RESPONSE_BYTES:
+        return None
+    try:
+        return json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
 
 
 def embedded_json_state(page) -> list[object]:
@@ -816,20 +851,17 @@ def inspect_match(match_url: str, diagnostics_dir: Path) -> VeoInspection:
             total = response.headers.get("content-range", "").rsplit("/", 1)[-1] if response.status == 206 else size
             if resource is not None and total.isdigit():
                 resource["size_bytes"] = int(total)
-            if content and "json" in content and size.isdigit() and int(size) <= 2_000_000:
-                try:
-                    payload = response.json()
-                    structured.observe_json(response.url, payload, phase, status_code=response.status)
-                    for link in resource_links(payload, limit=MAX_RESOURCES):
-                        record_resource(link, None, phase)
-                    for video_url, directions_url in standard_video_camera_directions(payload):
-                        metadata_camera_directions.append((video_url, directions_url, phase))
-                    if isinstance(payload, dict) and isinstance(payload.get("match"), dict):
-                        for key in ("title", "date", "home_team", "away_team"):
-                            if isinstance(payload["match"].get(key), str):
-                                metadata[key] = payload["match"][key]
-                except Exception:
-                    pass
+            payload = bounded_json_response(response)
+            if payload is not None:
+                structured.observe_json(response.url, payload, phase, status_code=response.status)
+                for link in resource_links(payload, limit=MAX_RESOURCES):
+                    record_resource(link, None, phase)
+                for video_url, directions_url in standard_video_camera_directions(payload):
+                    metadata_camera_directions.append((video_url, directions_url, phase))
+                if isinstance(payload, dict) and isinstance(payload.get("match"), dict):
+                    for key in ("title", "date", "home_team", "away_team"):
+                        if isinstance(payload["match"].get(key), str):
+                            metadata[key] = payload["match"][key]
 
         def remember_request(request):
             if _is_relevant_resource(request.url):
