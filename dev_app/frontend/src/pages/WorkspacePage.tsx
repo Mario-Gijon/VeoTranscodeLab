@@ -6,7 +6,7 @@ import MatchViewer from '../components/MatchViewer'
 import type { ViewerPick, ViewMode } from '../components/MatchViewer'
 import { interactiveGroundPoint } from '../components/interactiveCamera'
 import type { InteractiveCamera } from '../components/interactiveCamera'
-import { appendMeasurement, matchTimestamp, selectedPitchPoints, viewLabel, VIEW_MODES } from '../components/workspaceGeometry'
+import { appendMeasurement, latestSelectedPitchPoint, matchTimestamp, pitchPoints, viewLabel, VIEW_MODES } from '../components/workspaceGeometry'
 import PanoramaViewer from '../components/PanoramaViewer'
 import PitchSvg from '../components/PitchSvg'
 import ValidationTable from '../components/ValidationTable'
@@ -96,7 +96,7 @@ export default function WorkspacePage({ matchId, calibrations, onBack }: Props) 
   }
   if (!match) return <Typography sx={{ p: 3 }}>{error || 'Loading match…'}</Typography>
   const displayPoints = points.filter((point) => point.view === mode && point.media_id === (frameRender?.id ?? source?.id) && (mode === 'tracking' || point.view_width === width))
-  const selectedPoint = selectedPitchPoints(points)[0] ?? null
+  const selectedPoint = latestSelectedPitchPoint(points)
   return <Box sx={{ p: { xs: 1, md: 2 } }}>
     <Stack direction="row" alignItems="center" gap={2} mb={1}><Button onClick={onBack}>← Library</Button><Typography variant="h6">{match.name}</Typography><Box flex={1} /><Button variant="outlined" size="small" onClick={() => setFilesOpen(true)}>Manage files</Button></Stack>
     {error && <Alert severity="error" onClose={() => setError('')}>{error}</Alert>}{busy && <LinearProgress />}
@@ -120,7 +120,7 @@ export default function WorkspacePage({ matchId, calibrations, onBack }: Props) 
           {frameRender && <Button onClick={() => { setFrameRender(null); generation.current++ }}>Return to video</Button>}
         </Stack><Slider aria-label="Match timeline" value={Math.min(time, duration)} max={duration || 1} step={source?.fps ? 1 / source.fps : .04} disabled={playbackDisabled} onChange={(_, value) => seek(value as number)} />
       </Box>
-      <Box minWidth={0}><Typography variant="subtitle1">Pitch</Typography>{context ? <PitchSvg length={context.field_length} width={context.field_width} points={selectedPitchPoints(points)} /> : <Alert severity="info">Pitch dimensions become available after selecting a calibration.</Alert>}
+      <Box minWidth={0}><Typography variant="subtitle1">Pitch</Typography>{context ? <PitchSvg length={context.field_length} width={context.field_width} points={pitchPoints(points)} /> : <Alert severity="info">Pitch dimensions become available after selecting a calibration.</Alert>}
         {mode === 'tracking' || mode === 'interactive' ? <Typography variant="caption">{mode === 'tracking' && !context?.tracking_geometry.available ? 'Pitch selection is unavailable for this video.' : 'Click the ground to move the shared pitch marker.'}</Typography> : <Stack spacing={1} mt={1}><FormControl size="small"><InputLabel shrink>Click mode / landmark</InputLabel><Select displayEmpty renderValue={(value) => value ? context?.landmarks.find((item) => item.id === value)?.name : 'Free point'} label="Click mode / landmark" value={landmark} onChange={(e) => setLandmark(e.target.value)}><MenuItem value="">Free point</MenuItem>{context?.landmarks.map((item) => <MenuItem key={item.id} value={item.id}>{item.name} · {item.x.toFixed(2)}, {item.z.toFixed(2)} m</MenuItem>)}</Select></FormControl><Typography variant="caption">Validation measures calibration error; it does not correct the geometry.</Typography></Stack>}
         <Button onClick={() => { setPoints([]); generation.current++ }}>Clear points</Button>
       </Box>

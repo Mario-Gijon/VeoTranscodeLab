@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dragCamera, initialCamera, interactiveGroundPoint, interactiveRay, interactiveShader, isDrag, MAX_FOV, MIN_FOV, PITCH_LIMIT, safeCamera, wheelCamera } from '../src/components/interactiveCamera.ts'
-import { appendMeasurement, canSelect, matchTimestamp, selectedPitchPoints, viewLabel, VIEW_MODES } from '../src/components/workspaceGeometry.ts'
+import { appendMeasurement, canSelect, latestSelectedPitchPoint, matchTimestamp, pitchPoints, validationStatistics, viewLabel, VIEW_MODES } from '../src/components/workspaceGeometry.ts'
 import { cameraDirectionAtTime, parseCameraDirections, projectTrackingGroundPoint } from '../src/components/trackingOverlay.ts'
 import { projectGroundPoint, interactiveTransform } from '../src/components/interactiveCamera.ts'
 import { nativeVideoPixel } from '../src/components/viewCoordinates.ts'
@@ -78,16 +78,54 @@ test('both new views replace the shared marker and reject invalid Tracking resul
   const point = interactiveGroundPoint(context, camera, 50, 50, 101, 101)
   let history = appendMeasurement([], { ...point, view: 'interactive', timestamp_s: 1.234 })
   history = appendMeasurement(history, { ...point, measured_x: 4, world_x: 4, view: 'tracking', timestamp_s: 5.678 })
-  assert.equal(history.length, 2); assert.equal(selectedPitchPoints(history).length, 1)
-  assert.equal(selectedPitchPoints(history)[0].view, 'tracking')
-  for (const _view of VIEW_MODES) assert.equal(selectedPitchPoints(history)[0].measured_x, 4)
+  assert.equal(history.length, 2); assert.equal(pitchPoints(history).length, 2)
+  assert.equal(latestSelectedPitchPoint(history).view, 'tracking')
+  for (const _view of VIEW_MODES) assert.equal(latestSelectedPitchPoint(history).measured_x, 4)
   for (const invalid of [{ status: 'camera_state_unavailable', measured_x: null }, { status: 'outside_field' }, { measured_z: NaN }]) {
     assert.equal(appendMeasurement(history, { ...point, ...invalid, view: 'tracking' }), history)
   }
   for (const view of ['panorama', 'dual_lens']) {
     history = appendMeasurement(history, { ...point, view })
-    assert.equal(selectedPitchPoints(history)[0].view, view)
+    assert.equal(latestSelectedPitchPoint(history).view, view)
   }
+})
+test('three valid measurements remain available to the pitch while the overlay uses only the newest', () => {
+  const points = [
+    { ...interactiveGroundPoint(context, camera, 40, 50, 101, 101), view: 'panorama', point_index: 1 },
+    { ...interactiveGroundPoint(context, camera, 50, 50, 101, 101), view: 'panorama', point_index: 2 },
+    { ...interactiveGroundPoint(context, camera, 60, 50, 101, 101), view: 'tracking', point_index: 3 },
+  ]
+  assert.equal(pitchPoints(points).length, 3)
+  assert.equal(latestSelectedPitchPoint(points).point_index, 3)
+  assert.equal(canSelect(false, true), false)
+  assert.equal(pitchPoints(points).length, 3)
+})
+test('landmark validation aggregates all landmarks and ignores free points', () => {
+  const landmark = (error, delta_x, delta_z) => ({ field_error_m: error, delta_x, delta_z })
+  const stats = validationStatistics([landmark(1, 1, -2), landmark(3, 3, 2), { field_error_m: null, delta_x: 100, delta_z: 100 }])
+  assert.equal(stats.n, 2)
+  assert.equal(stats.median, 2)
+  assert.equal(stats.mean, 2)
+  assert.equal(stats.rms, Math.sqrt(5))
+  assert.equal(stats.max, 3)
+  assert.equal(stats.meanDeltaX, 2)
+  assert.equal(stats.meanDeltaZ, 0)
+})
+test('free points and multiple landmark results preserve canonical validation fields', () => {
+  const point = interactiveGroundPoint(context, camera, 50, 50, 101, 101)
+  const free = { ...point, view: 'panorama', landmark: null, landmark_name: null }
+  const first = { ...point, view: 'panorama', landmark: 'center_mark', landmark_name: 'Center mark', expected_x: 0, expected_z: 0, delta_x: .2, delta_z: -.1, field_error_m: .224 }
+  const second = { ...point, view: 'panorama', landmark: 'left_penalty_spot', landmark_name: 'Left penalty spot', expected_x: -36, expected_z: 0, delta_x: -.4, delta_z: .3, field_error_m: .5 }
+  let history = appendMeasurement([], free)
+  history = appendMeasurement(history, first)
+  history = appendMeasurement(history, second)
+  assert.equal(history.length, 3)
+  assert.equal(pitchPoints(history).length, 3)
+  assert.equal(history[1].expected_x, 0)
+  assert.equal(history[1].measured_x, point.measured_x)
+  assert.equal(history[1].field_error_m, .224)
+  assert.equal(history[2].landmark_name, 'Left penalty spot')
+  assert.equal(history[0].field_error_m, null)
 })
 test('Interactive shader retains captured Panorama branch and all lens projection code', () => {
   const source = readFileSync(new URL('../../../reference/veo_panoramic.frag.glsl', import.meta.url), 'utf8')
@@ -105,7 +143,7 @@ test('shared Select gate preserves pitch history while disabling visual selectio
   for (const view of VIEW_MODES) {
     assert.equal(canSelect(false, true), false, view)
     assert.equal(canSelect(true, false), false, view)
-    assert.equal(selectedPitchPoints(history)[0].world_z, point.world_z, view)
+    assert.equal(pitchPoints(history)[0].world_z, point.world_z, view)
   }
   assert.equal(canSelect(true, true), true)
 })

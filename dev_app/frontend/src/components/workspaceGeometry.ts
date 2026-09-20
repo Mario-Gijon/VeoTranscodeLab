@@ -18,9 +18,29 @@ export function validPitchPoint(point: GroundPoint) {
     && (point.status === 'inside_field' || point.status === 'outside_field')
 }
 
-/** Keep validation history, but show only the latest valid canonical selection. */
-export function selectedPitchPoints(points: GroundPoint[]) {
-  return points.filter(validPitchPoint).slice(-1)
+/** All stored points that have a usable canonical field position. */
+export function pitchPoints(points: GroundPoint[]) {
+  return points.filter(validPitchPoint)
+}
+
+/** The newest valid canonical point drives the live Tracking/Interactive overlay. */
+export function latestSelectedPitchPoint(points: GroundPoint[]) {
+  return pitchPoints(points).at(-1) ?? null
+}
+
+export function validationStatistics(points: GroundPoint[]) {
+  const errors = points.map((point) => point.field_error_m).filter((value): value is number => value !== null && Number.isFinite(value))
+  const ordered = [...errors].sort((a, b) => a - b)
+  const landmarkPoints = points.filter((point) => point.field_error_m !== null && Number.isFinite(point.field_error_m))
+  return {
+    n: errors.length,
+    median: errors.length ? (ordered[Math.floor((errors.length - 1) / 2)] + ordered[Math.floor(errors.length / 2)]) / 2 : null,
+    rms: errors.length ? Math.sqrt(errors.reduce((sum, value) => sum + value ** 2, 0) / errors.length) : null,
+    max: errors.length ? Math.max(...errors) : null,
+    mean: errors.length ? errors.reduce((sum, value) => sum + value, 0) / errors.length : null,
+    meanDeltaX: landmarkPoints.length ? landmarkPoints.reduce((sum, point) => sum + (point.delta_x ?? 0), 0) / landmarkPoints.length : null,
+    meanDeltaZ: landmarkPoints.length ? landmarkPoints.reduce((sum, point) => sum + (point.delta_z ?? 0), 0) / landmarkPoints.length : null,
+  }
 }
 
 export function appendMeasurement(points: GroundPoint[], point: GroundPoint) {
